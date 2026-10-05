@@ -1,5 +1,4 @@
 import Foundation
-import Accessibility
 
 public enum HandState: String, Codable {
     case raised
@@ -33,7 +32,7 @@ public struct HandAssessment {
     }
 }
 
-/// Reads the user's own hand action, not participant indicators or the static "Raise" title.
+/// Reads the user's own video-tile indicator. Button descriptions can remain stale after AXPress.
 public enum HandClassifier {
     public static func assess(_ windows: [WindowSnapshot], complete: Bool) -> HandAssessment {
         let selection = CallWindowSelection(windows)
@@ -55,47 +54,47 @@ public enum HandClassifier {
             $0.role == "AXButton" && $0.identifier == "raisehands-button"
         }
         guard !buttons.isEmpty else { return (.unknown, "hand_control_missing") }
-        let states = buttons.map { button -> Set<HandState> in
-            Set(([button.label] + (button.detailLabels ?? [])).compactMap(state))
-        }
-        let recognized = states.reduce(into: Set<HandState>()) { $0.formUnion($1) }
-        if recognized.contains(.raised) && recognized.contains(.lowered) {
-            return (.ambiguous, "conflicting_hand_controls")
-        }
-        guard states.allSatisfy({ !$0.isEmpty }), let state = recognized.first else {
-            return (.unknown, "unrecognized_hand_label")
+        let indicators = window.controls.filter { OwnVideoHandIndicator.matches($0) }
+        guard !indicators.isEmpty else { return (.unknown, "own_video_missing") }
+        guard indicators.count == 1 else { return (.ambiguous, "multiple_own_videos") }
+        guard let state = OwnVideoHandIndicator.state(for: indicators[0].label) else {
+            return (.unknown, "unrecognized_own_video_label")
         }
         return (state, nil)
     }
-
-    private static func state(for label: String) -> HandState? {
-        let actions: [(String, HandState)] = [
-            ("lower your hand", .raised), ("lower hand", .raised),
-            ("raise your hand", .lowered), ("raise hand", .lowered),
-            ("abbassa la mano", .raised), ("alza la mano", .lowered),
-        ]
-        for (action, state) in actions where ControlLabel.matches(label, action: action) { return state }
-        return nil
-    }
 }
 
-/// Chromium exposes the button's action description as securely archived AXCustomContent.
-/// Only decode known value classes; malformed or unsupported content supplies no state.
-enum AccessibilityCustomContent {
-    static func labels(from raw: Any?) -> [String] {
-        guard let data = raw as? Data, data.count <= 262_144 else { return [] }
-        do {
-            let decoder = try NSKeyedUnarchiver(forReadingFrom: data)
-            decoder.requiresSecureCoding = true
-            decoder.decodingFailurePolicy = .setErrorAndReturn
-            defer { decoder.finishDecoding() }
-            let classes: [AnyClass] = [NSArray.self, AXCustomContent.self, NSString.self,
-                                       NSAttributedString.self, NSDictionary.self, NSNumber.self]
-            guard let entries = decoder.decodeObject(of: classes, forKey: NSKeyedArchiveRootObjectKey) as? [AXCustomContent],
-                  decoder.error == nil else { return [] }
-            return entries.map(\.value)
-        } catch {
-            return []
+/// Only the explicit self-video description is eligible; participant names are never matched.
+/// A complete recognized description is required before absence of the raised marker means lowered.
+enum OwnVideoHandIndicator {
+    static func matches(_ control: ControlSnapshot) -> Bool {
+        control.role == "AXImage" && fields(control.label).first == "myself video"
+    }
+
+    static func state(for label: String) -> HandState? {
+        let parts = fields(label)
+        guard parts.first == "myself video", parts.last == "has context menu",
+              let video = parts.lastIndex(where: { $0 == "video is on" || $0 == "video is off" }),
+              video >= 2, video < parts.count - 1 else { return nil }
+        // Skip the name and other metadata. A participant's name cannot supply a hand marker.
+        let markers = parts[(video + 1)..<(parts.count - 1)].filter { $0.contains("hand") }
+        if markers.isEmpty { return .lowered }
+        guard markers.count == 1,
+              markers[0].range(of: "^hand raised position [1-9][0-9]*$", options: .regularExpression) != nil else {
+            return nil
+        }
+        return .raised
+    }
+
+    /// Used for the final live recheck as well as full scans; no tooltip/custom-content reads.
+    static func read(value: (String) -> Any?) -> ControlSnapshot {
+        ControlSnapshot(role: value("AXRole") as? String ?? "", identifier: "",
+                        label: value("AXDescription") as? String ?? "")
+    }
+
+    private static func fields(_ label: String) -> [String] {
+        label.lowercased().split(separator: ",", omittingEmptySubsequences: false).map {
+            $0.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         }
     }
 }

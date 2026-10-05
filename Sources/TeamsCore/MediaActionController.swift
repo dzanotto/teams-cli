@@ -36,6 +36,7 @@ struct MediaActionController<Observation: MediaObservation> {
     let press: (String, Observation.State) throws -> Void
     let focusPreserved: () -> Bool?
     let waitForUpdate: () -> Void
+    var retryIncompleteVerification = false
 
     func set(_ target: Observation.State) throws -> MediaActionOutcome<Observation> {
         try perform { _ in target }
@@ -113,6 +114,10 @@ struct MediaActionController<Observation: MediaObservation> {
                 return result(state: unknownState, reason: reason, attempted: true, changed: nil)
             }
             if let reason = selectionFailure(observation) {
+                if retryIncompleteVerification && reason == "inspection_incomplete" {
+                    consecutiveMatches = 0
+                    continue
+                }
                 return result(state: unknownState, reason: reason, attempted: true, changed: nil)
             }
             guard observation.targetID == targetID else {
@@ -124,7 +129,8 @@ struct MediaActionController<Observation: MediaObservation> {
                 return result(state: target, reason: nil, attempted: true, changed: true, success: true)
             }
         }
-        return result(state: unknownState, reason: "verification_timeout", attempted: true, changed: nil)
+        let reason = observation.reason == "inspection_incomplete" ? "inspection_incomplete" : "verification_timeout"
+        return result(state: unknownState, reason: reason, attempted: true, changed: nil)
     }
 
     private func focusFailure(_ focus: Bool?) -> String? {

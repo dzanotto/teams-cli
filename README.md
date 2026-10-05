@@ -1,7 +1,8 @@
 # Teams CLI for macOS
 
 Reads microphone mute, camera on/off, and your raised-hand state in the Microsoft Teams desktop app
-and provides microphone mute/unmute/toggle, camera on/off/toggle, and call-end commands.
+and provides microphone mute/unmute/toggle, camera on/off/toggle, hand raise/lower,
+and call-end commands.
 It does not explicitly activate Teams, raise windows, send keyboard shortcuts,
 or restore focus. Media commands enforce focus checks; leaving a call allows
 Teams to change focus.
@@ -36,6 +37,8 @@ All commands support `--json`. Only status commands support `--window N`.
 | `teams camera off` | Turn the camera off |
 | `teams camera toggle` | Request the opposite camera state |
 | `teams hand status` | Read your own hand state: `raised` or `lowered` |
+| `teams hand raise` | Raise your own hand, or succeed without pressing if already raised |
+| `teams hand lower` | Lower your own hand, or succeed without pressing if already lowered |
 | `teams call end` | Leave your active call; report `ended` after verification |
 
 `teams --help`, `teams hand --help`, and `teams hand status --help` all show the
@@ -93,7 +96,7 @@ inspected. This is an endpoint comparison, not continuous monitoring; a user
 switching windows while the command runs may make it `false`. The command never
 attempts to restore focus, since doing so could override a deliberate user action.
 
-## Raised-hand status
+## Hand status and controls
 
 `teams hand status` reads your own hand state in the active, non-held call.
 It also supports `--json` and `--window N`. It does not raise or lower your hand.
@@ -108,27 +111,43 @@ The first command prints `raised` or `lowered`. The second includes the state,
 window index, and focus information in JSON. In the third, replace `2` with the
 current window index from that JSON output.
 
-The read uses the exact `raisehands-button` in a window with `hangup-button`.
-"Lower your hand" means your hand is raised; "Raise your hand" means it is lowered.
-Teams exposes this action description in `AXCustomContent` on the tested version.
-The CLI decodes that content using an allowed set of secure archive classes.
-An action description exposed directly as the button label or help is also supported.
+The read requires an exact `raisehands-button` and `hangup-button` in the same
+window as your own video tile. The tile is an Accessibility image whose English
+description begins with "Myself video". Its status fields include
+"Hand raised position N" while your hand is raised. A complete, recognized tile
+description without that marker means lowered. Names and other participants'
+tiles are ignored. Tile descriptions are not included in CLI output.
 
-The visible "Raise" label and `AXSelected` flag do not reliably distinguish the
-states in the tested installation, so neither is used to infer the hand state.
-Participant hand indicators are ignored. Missing or unrecognized descriptions
-return `unknown`; conflicting descriptions return `ambiguous`.
-The English action variants and Italian `Alza la mano` / `Abbassa la mano` are
-unit-tested; Italian hand labels have not been verified live.
+The button's `AXCustomContent` action description can stay stale after a press,
+even while the hand visibly changes. It is no longer used as state evidence.
+The visible "Raise" label and `AXSelected` flag are also unsuitable.
+Missing, hidden, localized, or unrecognized self-video descriptions return
+`unknown`; multiple matching self-video tiles return `ambiguous`.
+The current parser supports the observed English tile format. Camera-off tile
+descriptions are unit-tested but have not been verified live.
 
 Teams can place this control in its
 [React menu](https://support.microsoft.com/en-us/teams/meetings/use-meeting-controls-in-microsoft-teams).
 If it is not exposed in the accessibility tree, the CLI reports `unknown` and
 does not open a menu to find it. Status reads do not change accessibility settings.
 
-## Microphone and camera controls
+`teams hand raise` and `teams hand lower` request the corresponding state for your
+own hand. They require one non-held call, a recognized hand state, and preserved
+focus. Repeating a command succeeds without pressing again when the state already
+matches. They use the same action checks and verification described below.
 
-`teams mic mute`, `teams mic unmute`, `teams camera on`, and `teams camera off`
+```sh
+.build/release/teams hand raise
+.build/release/teams hand lower --json
+```
+
+Successful text output is `raised` or `lowered`. JSON uses the `hand` state key
+and an `action` of `raise` or `lower`. Neither action supports `--window`.
+
+## Microphone, camera, and hand controls
+
+`teams mic mute`, `teams mic unmute`, `teams camera on`, `teams camera off`,
+`teams hand raise`, and `teams hand lower`
 request a specific state. When that state is already present, they succeed
 without pressing anything, even if the button is disabled. This no-op confirms
 the existing Teams-reported state.
@@ -148,8 +167,13 @@ limited to status reads because its indices can reorder between invocations.
 
 Before a change, the command rereads Teams, pins the current process generation
 and exact window/media-button/hang-up objects, checks that the chosen control is enabled
-and supports `AXPress`, then rechecks the live label and focus. It dispatches at
+and supports `AXPress`, then rechecks the live state and focus. Hand actions
+reread the own-video indicator immediately before dispatch. It dispatches at
 most one press and requires two consecutive observations of the desired state.
+After a hand press, an incomplete scan resets confirmation and allows another
+read within the existing budget. It cannot establish success; two subsequent
+complete reads of the same target are still required. Incomplete preflight
+reads continue to refuse the action.
 For camera changes, those observations must also show that the camera button is
 enabled and supports pressing again: a temporarily disabled button during startup
 is allowed to settle within the verification budget, without another press.
@@ -169,21 +193,21 @@ before dispatch, or an unverified result afterward. Nothing attempts to restore
 focus. Notifications are best effort: the monitor detects reported changes but
 cannot guarantee that a Teams version will never shift focus during a press.
 
-JSON retains the corresponding `microphone` or `camera` status fields and adds:
+JSON retains the corresponding `microphone`, `camera`, or `hand` status field and adds:
 
 | Field | Meaning |
 | --- | --- |
-| `action` | `mute`, `unmute`, `toggle`, `on`, or `off` |
+| `action` | `mute`, `unmute`, `toggle`, `on`, `off`, `raise`, or `lower` |
 | `success` | Requested state confirmed with focus preserved |
 | `action_attempted` | An `AXPress` was dispatched or may have been dispatched |
 | `changed` | `false` for a no-op/refusal, `true` after verified change, `null` when an attempted action's outcome is uncertain |
 
-Microphone, camera, and call-end commands share a per-user process lock so concurrent CLI
+Microphone, camera, hand, and call-end commands share a per-user process lock so concurrent CLI
 invocations cannot overlap actions or accessibility setup/cleanup.
 A second invocation returns `command_in_progress`
 without waiting or pressing. The lock file stays in `/tmp`; the OS releases the
 lock when the process exits. Action sampling has an eight-second shared budget
-with at most eight verification observations for microphone changes and twenty
+with at most eight verification observations for microphone and hand changes and twenty
 for camera changes and call end; observations are spaced by 150 ms waits, and in-flight AX
 calls add overhead.
 
@@ -206,7 +230,7 @@ for actions. This command does not resume held calls or dismiss confirmation dia
 Focus changes are allowed by default for this command, as requested. Teams can
 bring its main window forward when the call window closes. `focus_unchanged` is
 reported when available, but a focus change or unavailable focus evidence does
-not make an otherwise verified call end fail. Microphone and camera commands
+not make an otherwise verified call end fail. Microphone, camera, and hand commands
 retain their existing focus requirements.
 
 The command pins the Teams process generation and exact call-window/Leave-button
@@ -297,7 +321,7 @@ observations from a partial scan, not definitive overall status.
   and short per-message timeouts. In-flight Accessibility requests and setup
   add some overhead; this is not a hard real-time deadline.
 - Status commands perform no call actions. Changes use only the exact
-  microphone, camera, or Leave button's `AXPress` action. There is no explicit activation, window raising,
+  microphone, camera, own-hand, or Leave button's `AXPress` action. There is no explicit activation, window raising,
   key/mouse event injection, network request, or logging of chat/meeting text.
 - Uses observed Teams UI identifiers, not a supported Microsoft control API;
   future Teams updates may require changes. The older third-party integration
@@ -309,7 +333,7 @@ observations from a partial scan, not definitive overall status.
 swift test
 ```
 
-The 142 automated tests cover label inversion, language/shortcut handling, pre-join and
+The 163 automated tests cover label inversion, language/shortcut handling, pre-join and
 participant exclusions, conflicting/duplicate controls, multiple call windows,
 unknown labels, incomplete reads, and held-call exclusion (including all-held
 and explicitly selected held windows). Camera tests additionally check that
@@ -327,9 +351,13 @@ observations with the desired state and a ready camera control after a press.
 Call-end tests cover Leave labels, refusal of "End meeting for all", call selection,
 held calls, target races, two consecutive closure observations, uncertain outcomes,
 the focus-change exception, cleanup failures, and the no-retry rule.
-Hand tests cover custom-content decoding, static labels, action descriptions,
-participant exclusions, held/multiple calls, incomplete reads, malformed archives,
-and backward-compatible control snapshots.
+Hand tests cover own-video indicators, stale button descriptions, participant
+exclusions, missing/duplicate tiles, malformed and incomplete descriptions,
+held/multiple calls, incomplete reads, and backward-compatible control snapshots.
+Hand-controller tests cover both directions, repeated requests, concurrent state
+changes, target identity, focus checks, refusal and uncertain outcomes, stable
+confirmation, fresh own-video reads before dispatch, and bounded recovery from
+incomplete verification scans without repeating a press.
 
 Live validation on 2026-10-05: macOS 27.0.1, Apple Silicon, Teams
 26213.1006.5011.1671. The release executable read two call windows with different
@@ -415,3 +443,28 @@ Read-only inspection established that `AXCustomContent` contained "Lower your ha
 while the button's visible label remained "Raise" and `AXSelected` was false.
 The lowered state is covered by automated tests but has not yet been verified live.
 No hand action was dispatched by the CLI or diagnostics.
+
+Hand raise/lower builds successfully, and all 161 tests pass (including 19 new
+hand-controller and pre-dispatch snapshot tests). Release CLI checks passed for
+34 help forms and 25 invalid argument combinations. No automated live hand
+actions were run at that stage.
+
+Subsequent manual testing found successful hand changes with failed verification.
+With explicit approval, diagnostics reproduced one raise and one lower attempt:
+the button's action description remained stale throughout verification and six
+post-cleanup reads, producing `verification_timeout` with no observed focus change.
+During the lower attempt, the own-video raised marker disappeared on the first
+post-press read (approximately 0.34 seconds after the preflight sample) and stayed
+absent. Read-only inspection verified the complete lowered tile description.
+
+Hand state now uses that own-video indicator throughout status, preflight, and
+verification. The 163-test suite includes stale-description and incomplete-scan
+regressions. The original `inspection_incomplete` was not reproduced live; bounded
+read recovery is tested automatically. The diagnostic attempts above used the
+previous implementation.
+The rebuilt release status command subsequently returned `hand: lowered`, exit 0,
+and `focus_unchanged: true` in approximately 0.44 seconds. The release build and
+all 163 tests passed; the 41 hand tests also passed after refining the incomplete
+scan fixture to omit target identity, matching the native reader's behavior.
+The user subsequently tested the revised raise/lower commands live and confirmed
+that they work.

@@ -7,6 +7,7 @@ Usage: teams mic status [--json] [--window N]
        teams camera status [--json] [--window N]
        teams camera <on|off|toggle> [--json]
        teams hand status [--json] [--window N]
+       teams hand <raise|lower> [--json]
        teams call end [--json]
 
 Status output: mic = muted/unmuted; camera = on/off; hand = raised/lowered.
@@ -14,7 +15,7 @@ Call end reports ended after verified closure of the selected call window.
 Inconclusive reads report unknown or ambiguous, with a reason.
 
 Hand status reads your own hand and does not raise or lower it.
-Media commands set a desired state and verify it, acting only when a change is needed.
+Mic, camera, and hand commands set a desired state and verify it, acting only when a change is needed.
 Toggle requests the opposite of the first confirmed state for the chosen control.
 Call end leaves your call; Teams may change focus when the call window closes.
 Calls on hold are excluded, including when selected with --window.
@@ -30,7 +31,7 @@ Exit codes: 0 known state or verified action; 2 unknown/ambiguous; 3 accessibili
 """
 
 private enum MediaCommand: String { case mic, camera, call, hand }
-private enum Operation: String { case status, mute, unmute, toggle, on, off, end }
+private enum Operation: String { case status, mute, unmute, toggle, on, off, end, raise, lower }
 
 private struct Options {
     let media: MediaCommand
@@ -43,7 +44,8 @@ private struct Options {
               let operation = Operation(rawValue: arguments[1]) else { throw UsageError.invalid }
         switch (media, operation) {
         case (.mic, .status), (.camera, .status), (.hand, .status), (.mic, .toggle), (.camera, .toggle),
-             (.mic, .mute), (.mic, .unmute), (.camera, .on), (.camera, .off), (.call, .end): break
+             (.mic, .mute), (.mic, .unmute), (.camera, .on), (.camera, .off), (.call, .end),
+             (.hand, .raise), (.hand, .lower): break
         default: throw UsageError.invalid
         }
         self.media = media
@@ -185,7 +187,12 @@ do {
                             action: options.operation.rawValue, changed: result.changed,
                             actionAttempted: result.actionAttempted, success: result.success)
         case .hand:
-            throw UsageError.invalid
+            let result = try TeamsHandCommands.set(options.operation == .raise ? .raised : .lowered)
+            output = Output(media: .hand, state: result.state.rawValue, reason: result.reason,
+                            windows: result.windows.map { WindowOutput(window: $0.window, state: $0.state.rawValue) },
+                            focusUnchanged: result.focusUnchanged, excludedWindows: result.excludedWindows,
+                            action: options.operation.rawValue, changed: result.changed,
+                            actionAttempted: result.actionAttempted, success: result.success)
         }
         emit(output, json: options.json)
         exit(output.success == true ? 0 : 6)

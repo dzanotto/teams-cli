@@ -59,7 +59,7 @@ private final class MediaCommandLock {
     private var descriptor: Int32
 
     init() throws {
-        // Retain the original microphone lock path so camera/call commands also serialize
+        // Retain the original microphone lock path so camera/hand/call commands also serialize
         // with older microphone binaries. Keep the inode when releasing the lock.
         let path = "/tmp/teams-cli-microphone-\(getuid()).lock"
         descriptor = open(path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
@@ -109,6 +109,7 @@ private struct MediaTargetHandle {
     let window: AXUIElement
     let button: AXUIElement
     let hangup: AXUIElement
+    var ownVideo: AXUIElement?
 
     func matches(_ handles: CallWindowHandles, control: MediaControl) -> Bool {
         let buttons = handles.buttons(for: control)
@@ -129,7 +130,18 @@ private enum AccessibilityActionError: Error {
     case pressFailed(Int32)
 }
 
-/// AX mechanics shared by microphone and camera; each supplies its own classifier.
+/// Reads the live button identity and label again just before dispatch.
+enum MediaButtonSnapshot {
+    static func read(control: MediaControl, value: (String) -> Any?) -> ControlSnapshot {
+        let identifiers = ["AXDOMIdentifier", kAXIdentifierAttribute].compactMap { value($0) as? String }
+        let labels = [kAXDescriptionAttribute, kAXTitleAttribute, kAXHelpAttribute].compactMap { value($0) as? String }
+        return ControlSnapshot(role: value(kAXRoleAttribute) as? String ?? "",
+                               identifier: identifiers.contains(control.rawValue) ? control.rawValue : "",
+                               label: labels.first(where: { !$0.isEmpty }) ?? "")
+    }
+}
+
+/// AX mechanics shared by microphone, camera and hand; each supplies its own classifier.
 final class NativeMediaBackend<Assessment, State: Equatable> {
     private let reader = TeamsAccessibilityReader()
     private let control: MediaControl
@@ -160,6 +172,7 @@ final class NativeMediaBackend<Assessment, State: Equatable> {
         guard let selected = select(assessment),
               let handles = snapshot.handles[selected.window],
               handles.buttons(for: control).count == 1, handles.hangups.count == 1,
+              control != .hand || handles.ownVideos.count == 1,
               let launched = handles.application.launchDate else {
             return NativeMediaObservation(assessment: assessment, targetID: nil, canPress: false)
         }
@@ -169,6 +182,9 @@ final class NativeMediaBackend<Assessment, State: Equatable> {
                                        launched: launched, window: handles.window,
                                        button: button, hangup: handles.hangups[0])
         }
+        // Self-video tiles can rerender independently of the call/control identity.
+        // Retain the current scan's handle for a fresh state read immediately before pressing.
+        target?.ownVideo = control == .hand ? handles.ownVideos.first : nil
         // A temporarily disabled camera retains its identity while Teams starts it.
         return NativeMediaObservation(assessment: assessment, targetID: target?.id, canPress: canPress(button))
     }
@@ -186,22 +202,16 @@ final class NativeMediaBackend<Assessment, State: Equatable> {
         }
         guard fresh.canPress else { throw MediaPressRejected(reason: "control_unavailable") }
 
-        let identifiers = ["AXDOMIdentifier", kAXIdentifierAttribute].compactMap {
-            value(target.button, $0) as? String
-        }
-        let labels = [kAXDescriptionAttribute, kAXTitleAttribute, kAXHelpAttribute].compactMap {
-            value(target.button, $0) as? String
-        }
-        let button = ControlSnapshot(
-            role: value(target.button, kAXRoleAttribute) as? String ?? "",
-            identifier: identifiers.contains(control.rawValue) ? control.rawValue : "",
-            label: labels.first(where: { !$0.isEmpty }) ?? ""
-        )
+        let button = MediaButtonSnapshot.read(control: control) { value(target.button, $0) }
         // The full scan above established call eligibility. This synthetic hangup
-        // permits the media classifier to validate only the freshly read live button.
-        let check = classify([WindowSnapshot(index: 1, controls: [
+        // permits the classifier to validate the freshly read button and state indicator.
+        var controls = [
             button, ControlSnapshot(role: "AXButton", identifier: "hangup-button", label: "")
-        ])], true)
+        ]
+        if control == .hand, let ownVideo = target.ownVideo {
+            controls.append(OwnVideoHandIndicator.read { value(ownVideo, $0) })
+        }
+        let check = classify([WindowSnapshot(index: 1, controls: controls)], true)
         guard select(check)?.state == expectedState else {
             throw MediaPressRejected(reason: stateChangedReason)
         }

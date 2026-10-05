@@ -28,6 +28,7 @@ struct CallWindowHandles {
     var cameras: [AXUIElement] = []
     var hangups: [AXUIElement] = []
     var hands: [AXUIElement] = []
+    var ownVideos: [AXUIElement] = []
 
     func buttons(for control: MediaControl) -> [AXUIElement] {
         switch control {
@@ -112,6 +113,15 @@ public final class TeamsAccessibilityReader {
                     if fields.failed { complete = false }
                     let role = fields.values[0] as? String ?? ""
                     if role.isEmpty { complete = false }
+                    if control == .hand && role == "AXImage" {
+                        let text = attributes(node, [kAXDescriptionAttribute])
+                        if text.failed { complete = false }
+                        let indicator = ControlSnapshot(role: role, identifier: "", label: text.values[0] as? String ?? "")
+                        if OwnVideoHandIndicator.matches(indicator) {
+                            controls.append(indicator)
+                            windowHandles.ownVideos.append(node)
+                        }
+                    }
                     if role == "AXButton" {
                         let identity = attributes(node, ["AXDOMIdentifier", kAXIdentifierAttribute])
                         if identity.failed { complete = false }
@@ -123,15 +133,7 @@ public final class TeamsAccessibilityReader {
                             let text = attributes(node, [kAXDescriptionAttribute, kAXTitleAttribute, kAXHelpAttribute])
                             if text.failed { complete = false }
                             let label = text.values.compactMap { $0 as? String }.first(where: { !$0.isEmpty }) ?? ""
-                            var detailLabels: [String]?
-                            if identifier == MediaControl.hand.rawValue {
-                                let custom = attributes(node, ["AXCustomContent"])
-                                if custom.failed { complete = false }
-                                detailLabels = text.values.compactMap { $0 as? String } +
-                                    AccessibilityCustomContent.labels(from: custom.values[0])
-                            }
-                            controls.append(ControlSnapshot(role: role, identifier: identifier, label: label,
-                                                            detailLabels: detailLabels))
+                            controls.append(ControlSnapshot(role: role, identifier: identifier, label: label))
                             if identifier == "microphone-button" { windowHandles.microphones.append(node) }
                             if identifier == "video-button" { windowHandles.cameras.append(node) }
                             if identifier == "hangup-button" { windowHandles.hangups.append(node) }
