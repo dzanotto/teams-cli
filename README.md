@@ -1,6 +1,6 @@
 # Teams CLI for macOS
 
-Reads microphone mute and camera on/off states in the Microsoft Teams desktop app
+Reads microphone mute, camera on/off, and your raised-hand state in the Microsoft Teams desktop app
 and provides microphone mute/unmute/toggle, camera on/off/toggle, and call-end commands.
 It does not explicitly activate Teams, raise windows, send keyboard shortcuts,
 or restore focus. Media commands enforce focus checks; leaving a call allows
@@ -14,24 +14,37 @@ There are no third-party dependencies.
 ```sh
 cd teams-cli
 swift build -c release
-.build/release/teams mic status
-.build/release/teams mic status --json
-.build/release/teams camera status
-.build/release/teams camera status --json
-.build/release/teams mic mute --json
-.build/release/teams mic unmute --json
-.build/release/teams mic toggle --json
-.build/release/teams camera on --json
-.build/release/teams camera off --json
-.build/release/teams camera toggle --json
-.build/release/teams call end --json
+.build/release/teams --help
 ```
 
 The executable is already built at `.build/release/teams` in this workspace.
 It can be invoked by absolute path from another directory.
 
+## Command reference
+
+Use `.build/release/teams` in place of `teams` below when running from this workspace.
+All commands support `--json`. Only status commands support `--window N`.
+
+| Command | Behavior |
+| --- | --- |
+| `teams mic status` | Read microphone state: `muted` or `unmuted` |
+| `teams mic mute` | Mute the microphone |
+| `teams mic unmute` | Unmute the microphone |
+| `teams mic toggle` | Request the opposite microphone state |
+| `teams camera status` | Read camera state: `on` or `off` |
+| `teams camera on` | Turn the camera on |
+| `teams camera off` | Turn the camera off |
+| `teams camera toggle` | Request the opposite camera state |
+| `teams hand status` | Read your own hand state: `raised` or `lowered` |
+| `teams call end` | Leave your active call; report `ended` after verification |
+
+`teams --help`, `teams hand --help`, and `teams hand status --help` all show the
+current usage. Other command groups and full commands also support help;
+`-h` is accepted wherever `--help` is supported.
+
 For one identified call window, microphone output is `muted` or `unmuted`;
-camera output is `on` or `off`. These describe the corresponding Teams button's
+camera output is `on` or `off`; hand output is `raised` or `lowered`.
+These describe the corresponding Teams control's
 state. They do not measure audio/video capture, physical device switches,
 device permissions, or whether remote participants receive the media.
 
@@ -54,7 +67,7 @@ They can change when windows open, close, or reorder. Refresh `--json` before
 selecting a window; indices are not persistent meeting identifiers. The CLI
 never silently selects the first call. Multiple microphone controls with
 conflicting labels within a selected window are also ambiguous. The same rules
-apply to camera controls, and `--window N` is supported by both commands.
+apply to camera and hand controls. `--window N` is supported by all status commands.
 
 Example for multiple call windows (states and indices are illustrative):
 
@@ -71,14 +84,47 @@ Example for multiple call windows (states and indices are illustrative):
 }
 ```
 
-For camera JSON, the top-level status key is `camera`; microphone JSON continues
-to use `microphone`. Both include `windows`, `excluded_windows`, and any reason.
+The top-level status key is `microphone`, `camera`, or `hand` for the respective
+command. All include `windows`, `excluded_windows`, and any reason.
 
 For status commands, `focus_unchanged` compares the foreground application and its focused
 window before and after the read. It is omitted when either window cannot be
 inspected. This is an endpoint comparison, not continuous monitoring; a user
 switching windows while the command runs may make it `false`. The command never
 attempts to restore focus, since doing so could override a deliberate user action.
+
+## Raised-hand status
+
+`teams hand status` reads your own hand state in the active, non-held call.
+It also supports `--json` and `--window N`. It does not raise or lower your hand.
+
+```sh
+.build/release/teams hand status
+.build/release/teams hand status --json
+.build/release/teams hand status --json --window 2
+```
+
+The first command prints `raised` or `lowered`. The second includes the state,
+window index, and focus information in JSON. In the third, replace `2` with the
+current window index from that JSON output.
+
+The read uses the exact `raisehands-button` in a window with `hangup-button`.
+"Lower your hand" means your hand is raised; "Raise your hand" means it is lowered.
+Teams exposes this action description in `AXCustomContent` on the tested version.
+The CLI decodes that content using an allowed set of secure archive classes.
+An action description exposed directly as the button label or help is also supported.
+
+The visible "Raise" label and `AXSelected` flag do not reliably distinguish the
+states in the tested installation, so neither is used to infer the hand state.
+Participant hand indicators are ignored. Missing or unrecognized descriptions
+return `unknown`; conflicting descriptions return `ambiguous`.
+The English action variants and Italian `Alza la mano` / `Abbassa la mano` are
+unit-tested; Italian hand labels have not been verified live.
+
+Teams can place this control in its
+[React menu](https://support.microsoft.com/en-us/teams/meetings/use-meeting-controls-in-microsoft-teams).
+If it is not exposed in the accessibility tree, the CLI reports `unknown` and
+does not open a menu to find it. Status reads do not change accessibility settings.
 
 ## Microphone and camera controls
 
@@ -201,7 +247,7 @@ permission are requested by this program.
 
 | Code | Output | Meaning |
 | --- | --- | --- |
-| 0 | `muted` / `unmuted` / `on` / `off` / `ended` | A recognized media state or verified call end |
+| 0 | `muted` / `unmuted` / `on` / `off` / `raised` / `lowered` / `ended` | A recognized control state or verified call end |
 | 2 | `unknown` / `ambiguous` | Inconclusive read or multiple possible controls |
 | 3 | `permission_denied` | Accessibility permission unavailable |
 | 4 | `not_running` | Teams was not found after the permission check |
@@ -263,7 +309,7 @@ observations from a partial scan, not definitive overall status.
 swift test
 ```
 
-The 122 automated tests cover label inversion, language/shortcut handling, pre-join and
+The 142 automated tests cover label inversion, language/shortcut handling, pre-join and
 participant exclusions, conflicting/duplicate controls, multiple call windows,
 unknown labels, incomplete reads, and held-call exclusion (including all-held
 and explicitly selected held windows). Camera tests additionally check that
@@ -281,6 +327,9 @@ observations with the desired state and a ready camera control after a press.
 Call-end tests cover Leave labels, refusal of "End meeting for all", call selection,
 held calls, target races, two consecutive closure observations, uncertain outcomes,
 the focus-change exception, cleanup failures, and the no-retry rule.
+Hand tests cover custom-content decoding, static labels, action descriptions,
+participant exclusions, held/multiple calls, incomplete reads, malformed archives,
+and backward-compatible control snapshots.
 
 Live validation on 2026-10-05: macOS 27.0.1, Apple Silicon, Teams
 26213.1006.5011.1671. The release executable read two call windows with different
@@ -356,3 +405,13 @@ microphone, and camera commands and plain-text call output; the sandbox returned
 `accessibility_permission_required` before any action or accessibility setup.
 The user subsequently tested call end manually and confirmed that it works.
 No automated live call-end test was run.
+
+Hand status builds successfully, and all 142 tests pass (including 20 new hand
+tests). Release CLI checks passed for twelve help forms and seventeen invalid
+hand command/option combinations. After the user manually raised their hand,
+`teams hand status --json` returned `hand: raised` for window 2 with
+`focus_unchanged: true` and exit 0. The read took approximately 0.15 seconds.
+Read-only inspection established that `AXCustomContent` contained "Lower your hand"
+while the button's visible label remained "Raise" and `AXSelected` was false.
+The lowered state is covered by automated tests but has not yet been verified live.
+No hand action was dispatched by the CLI or diagnostics.

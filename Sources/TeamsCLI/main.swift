@@ -2,12 +2,18 @@ import Foundation
 import TeamsCore
 
 private let usage = """
-Usage: teams <mic|camera> status [--json] [--window N]
+Usage: teams mic status [--json] [--window N]
        teams mic <mute|unmute|toggle> [--json]
+       teams camera status [--json] [--window N]
        teams camera <on|off|toggle> [--json]
+       teams hand status [--json] [--window N]
        teams call end [--json]
 
-Read the microphone or camera state of an existing Microsoft Teams desktop call.
+Status output: mic = muted/unmuted; camera = on/off; hand = raised/lowered.
+Call end reports ended after verified closure of the selected call window.
+Inconclusive reads report unknown or ambiguous, with a reason.
+
+Hand status reads your own hand and does not raise or lower it.
 Media commands set a desired state and verify it, acting only when a change is needed.
 Toggle requests the opposite of the first confirmed state for the chosen control.
 Call end leaves your call; Teams may change focus when the call window closes.
@@ -16,14 +22,14 @@ Never explicitly activates Teams, sends keys, or shows permission dialogs.
 
   --json       Print machine-readable status and per-window results.
   --window N   Status only: inspect a window using its 1-based index from --json.
-  --help       Show this help.
+  -h, --help   Show this help, also after a command group or full command.
 
-Exit codes: 0 known state; 2 unknown/ambiguous; 3 accessibility denied;
+Exit codes: 0 known state or verified action; 2 unknown/ambiguous; 3 accessibility denied;
             4 Teams not running; 5 read failure; 6 action refused/unverified;
             64 invalid arguments.
 """
 
-private enum MediaCommand: String { case mic, camera, call }
+private enum MediaCommand: String { case mic, camera, call, hand }
 private enum Operation: String { case status, mute, unmute, toggle, on, off, end }
 
 private struct Options {
@@ -36,7 +42,7 @@ private struct Options {
         guard arguments.count >= 2, let media = MediaCommand(rawValue: arguments[0]),
               let operation = Operation(rawValue: arguments[1]) else { throw UsageError.invalid }
         switch (media, operation) {
-        case (.mic, .status), (.camera, .status), (.mic, .toggle), (.camera, .toggle),
+        case (.mic, .status), (.camera, .status), (.hand, .status), (.mic, .toggle), (.camera, .toggle),
              (.mic, .mute), (.mic, .unmute), (.camera, .on), (.camera, .off), (.call, .end): break
         default: throw UsageError.invalid
         }
@@ -81,7 +87,7 @@ private struct Output: Encodable {
     var success: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case microphone, camera, call, reason, windows, action, changed, success
+        case microphone, camera, call, hand, reason, windows, action, changed, success
         case focusUnchanged = "focus_unchanged"
         case excludedWindows = "excluded_windows"
         case actionAttempted = "action_attempted"
@@ -94,6 +100,7 @@ private struct Output: Encodable {
         case .mic: stateKey = .microphone
         case .camera: stateKey = .camera
         case .call: stateKey = .call
+        case .hand: stateKey = .hand
         }
         try container.encode(state, forKey: stateKey)
         try container.encodeIfPresent(reason, forKey: .reason)
@@ -138,9 +145,10 @@ private func emit(_ output: Output, json: Bool) {
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
-if arguments == ["--help"] || arguments == ["-h"] ||
-    (arguments.count == 3 && arguments.last == "--help" &&
-     (try? Options(Array(arguments.prefix(2)))) != nil) {
+if let last = arguments.last, ["--help", "-h"].contains(last),
+   arguments.count == 1 ||
+    (arguments.count == 2 && MediaCommand(rawValue: arguments[0]) != nil) ||
+    (arguments.count == 3 && (try? Options(Array(arguments.prefix(2)))) != nil) {
     print(usage)
     exit(0)
 }
@@ -176,11 +184,20 @@ do {
                             focusUnchanged: result.focusUnchanged, excludedWindows: result.excludedWindows,
                             action: options.operation.rawValue, changed: result.changed,
                             actionAttempted: result.actionAttempted, success: result.success)
+        case .hand:
+            throw UsageError.invalid
         }
         emit(output, json: options.json)
         exit(output.success == true ? 0 : 6)
     }
-    let snapshot = try TeamsAccessibilityReader().read(control: options.media == .mic ? .microphone : .camera)
+    let control: MediaControl
+    switch options.media {
+    case .mic: control = .microphone
+    case .camera: control = .camera
+    case .hand: control = .hand
+    case .call: throw UsageError.invalid
+    }
+    let snapshot = try TeamsAccessibilityReader().read(control: control)
     let windows = options.window.map { selected in snapshot.windows.filter { $0.index == selected } } ?? snapshot.windows
     if options.window != nil && windows.isEmpty {
         emit(Output(media: options.media, state: "unknown", reason: "window_not_found", windows: [],
@@ -201,9 +218,14 @@ do {
                         focusUnchanged: snapshot.focusUnchanged, excludedWindows: assessment.excludedWindows)
     case .call:
         throw UsageError.invalid
+    case .hand:
+        let assessment = HandClassifier.assess(windows, complete: snapshot.complete)
+        output = Output(media: .hand, state: assessment.state.rawValue, reason: assessment.reason,
+                        windows: assessment.windows.map { WindowOutput(window: $0.window, state: $0.state.rawValue) },
+                        focusUnchanged: snapshot.focusUnchanged, excludedWindows: assessment.excludedWindows)
     }
     emit(output, json: options.json)
-    exit(["muted", "unmuted", "on", "off"].contains(output.state) ? 0 : 2)
+    exit(["muted", "unmuted", "on", "off", "raised", "lowered"].contains(output.state) ? 0 : 2)
 } catch {
     if error is UsageError { stderr(usage); exit(64) }
     let status: String

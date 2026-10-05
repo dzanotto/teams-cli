@@ -4,11 +4,14 @@ public struct ControlSnapshot: Codable, Equatable {
     public let role: String
     public let identifier: String
     public let label: String
+    /// Additional accessible action descriptions, when exposed separately from the title.
+    public let detailLabels: [String]?
 
-    public init(role: String, identifier: String, label: String) {
+    public init(role: String, identifier: String, label: String, detailLabels: [String]? = nil) {
         self.role = role
         self.identifier = identifier
         self.label = label
+        self.detailLabels = detailLabels
     }
 }
 

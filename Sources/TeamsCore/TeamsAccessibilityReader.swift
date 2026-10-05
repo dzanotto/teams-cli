@@ -11,6 +11,7 @@ public enum MediaControl: String {
     case microphone = "microphone-button"
     case camera = "video-button"
     case call = "hangup-button"
+    case hand = "raisehands-button"
 }
 
 public struct TeamsSnapshot {
@@ -26,12 +27,14 @@ struct CallWindowHandles {
     var microphones: [AXUIElement] = []
     var cameras: [AXUIElement] = []
     var hangups: [AXUIElement] = []
+    var hands: [AXUIElement] = []
 
     func buttons(for control: MediaControl) -> [AXUIElement] {
         switch control {
         case .microphone: return microphones
         case .camera: return cameras
         case .call: return hangups
+        case .hand: return hands
         }
     }
 }
@@ -61,20 +64,20 @@ public final class TeamsAccessibilityReader {
             _ = attribute(element, kAXRoleAttribute)
         }
 
-        var result = try scan(apps, deadline: deadline)
+        var result = try scan(apps, control: control, deadline: deadline)
         // The web tree can appear asynchronously after the role query. Retry once without
         // changing focus or enabling screen-reader mode. The scan itself is bounded.
         if ProcessInfo.processInfo.systemUptime + 0.25 < deadline && result.complete && !result.windows.contains(where: { window in
             window.controls.contains(where: { $0.identifier == control.rawValue })
         }) {
             Thread.sleep(forTimeInterval: 0.25)
-            result = try scan(apps, deadline: deadline)
+            result = try scan(apps, control: control, deadline: deadline)
         }
         return TeamsSnapshot(windows: result.windows, complete: result.complete,
                              focusUnchanged: focusBefore.matches(FocusSnapshot.capture()), handles: result.handles)
     }
 
-    private func scan(_ apps: [NSRunningApplication], deadline: TimeInterval) throws -> TeamsSnapshot {
+    private func scan(_ apps: [NSRunningApplication], control: MediaControl, deadline: TimeInterval) throws -> TeamsSnapshot {
         var visited = Set<AXUIElement>()
         var scheduled = Set<AXUIElement>()
         var complete = true
@@ -113,14 +116,26 @@ public final class TeamsAccessibilityReader {
                         let identity = attributes(node, ["AXDOMIdentifier", kAXIdentifierAttribute])
                         if identity.failed { complete = false }
                         let identifiers = identity.values.compactMap { $0 as? String }
-                        if let identifier = identifiers.first(where: { ["microphone-button", "video-button", "hangup-button", "resume-button"].contains($0) }) {
+                        if let identifier = identifiers.first(where: {
+                            ["microphone-button", "video-button", "hangup-button", "resume-button"].contains($0) ||
+                                (control == .hand && $0 == MediaControl.hand.rawValue)
+                        }) {
                             let text = attributes(node, [kAXDescriptionAttribute, kAXTitleAttribute, kAXHelpAttribute])
                             if text.failed { complete = false }
                             let label = text.values.compactMap { $0 as? String }.first(where: { !$0.isEmpty }) ?? ""
-                            controls.append(ControlSnapshot(role: role, identifier: identifier, label: label))
+                            var detailLabels: [String]?
+                            if identifier == MediaControl.hand.rawValue {
+                                let custom = attributes(node, ["AXCustomContent"])
+                                if custom.failed { complete = false }
+                                detailLabels = text.values.compactMap { $0 as? String } +
+                                    AccessibilityCustomContent.labels(from: custom.values[0])
+                            }
+                            controls.append(ControlSnapshot(role: role, identifier: identifier, label: label,
+                                                            detailLabels: detailLabels))
                             if identifier == "microphone-button" { windowHandles.microphones.append(node) }
                             if identifier == "video-button" { windowHandles.cameras.append(node) }
                             if identifier == "hangup-button" { windowHandles.hangups.append(node) }
+                            if identifier == MediaControl.hand.rawValue { windowHandles.hands.append(node) }
                         }
                     }
                     let children = fields.values[1] as? [AXUIElement] ?? []
