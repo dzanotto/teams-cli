@@ -1,7 +1,7 @@
 # Teams CLI for macOS
 
 Reads microphone mute and camera on/off states in the Microsoft Teams desktop app
-and provides microphone mute/unmute/toggle and camera on/off commands. It never activates Teams,
+and provides microphone mute/unmute/toggle and camera on/off/toggle commands. It never activates Teams,
 raises its windows, sends keyboard shortcuts, or restores focus as a workaround.
 Leaving a call is future work.
 
@@ -22,6 +22,7 @@ swift build -c release
 .build/release/teams mic toggle --json
 .build/release/teams camera on --json
 .build/release/teams camera off --json
+.build/release/teams camera toggle --json
 ```
 
 The executable is already built at `.build/release/teams` in this workspace.
@@ -84,10 +85,11 @@ request a specific state. When that state is already present, they succeed
 without pressing anything, even if the button is disabled. This no-op confirms
 the existing Teams-reported state.
 
-`teams mic toggle` requests the opposite of the first confirmed microphone state:
-muted becomes unmuted, and unmuted becomes muted. The read and change run under
-the same process lock and checks as mute/unmute. The desired state stays fixed
-through rechecks: if someone else reaches it before the command's pre-press read,
+`teams mic toggle` and `teams camera toggle` request the opposite of the first
+confirmed state for the chosen control: muted becomes unmuted and vice versa;
+camera on becomes off and vice versa. The read and change run under
+the same process lock and checks as the explicit state commands. The desired
+state stays fixed through rechecks: if someone else reaches it before the command's pre-press read,
 the command succeeds without pressing (`changed: false`, `action_attempted: false`).
 A later state change detected at dispatch is refused. Each new invocation reads
 the current state again; toggle is not idempotent.
@@ -221,7 +223,7 @@ observations from a partial scan, not definitive overall status.
 swift test
 ```
 
-The 86 automated tests cover label inversion, language/shortcut handling, pre-join and
+The 98 automated tests cover label inversion, language/shortcut handling, pre-join and
 participant exclusions, conflicting/duplicate controls, multiple call windows,
 unknown labels, incomplete reads, and held-call exclusion (including all-held
 and explicitly selected held windows). Camera tests additionally check that
@@ -234,6 +236,8 @@ controls without repeating the press or confirming success prematurely.
 Toggle tests cover both directions, repeated invocations, concurrent state changes,
 held-call exclusion, target identity, unavailable states/controls, focus checks,
 stable confirmation, and uncertain outcomes without retries.
+Camera toggle also waits through delayed startup and requires two consecutive
+observations with the desired state and a ready camera control after a press.
 
 Live validation on 2026-10-05: macOS 27.0.1, Apple Silicon, Teams
 26213.1006.5011.1671. The release executable read two call windows with different
@@ -296,3 +300,8 @@ Microphone toggle builds successfully, and all 86 tests pass (including 12 new
 toggle tests). Release CLI checks passed for nine help forms and ten invalid
 argument combinations. The user subsequently tested microphone toggle manually
 and confirmed that it works. No automated live microphone toggle was run.
+
+Camera toggle builds successfully, and all 98 tests pass (including 12 new
+camera-toggle tests). Release CLI checks passed for ten help forms and fourteen
+invalid argument combinations. The user subsequently tested camera toggle manually
+and confirmed that it works. No automated live camera toggle was run.

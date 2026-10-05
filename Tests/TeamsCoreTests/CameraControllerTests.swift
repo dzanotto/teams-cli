@@ -2,6 +2,184 @@ import XCTest
 @testable import TeamsCore
 
 final class CameraControllerTests: XCTestCase {
+    func testToggleBothDirectionsPressOnceAndRequireTwoConsecutiveReadySamples() throws {
+        for initial in [CameraState.on, .off] {
+            let target: CameraState = initial == .on ? .off : .on
+            let backend = FakeCameraBackend([
+                observed(initial), observed(initial), observed(target, ready: false),
+                observed(target), observed(target, ready: false), observed(target), observed(target),
+            ])
+            let result = try CameraController(backend: backend).toggle()
+            XCTAssertTrue(result.success)
+            XCTAssertEqual(result.state, target)
+            XCTAssertEqual(result.changed, true)
+            XCTAssertTrue(result.actionAttempted)
+            XCTAssertEqual(result.focusUnchanged, true)
+            XCTAssertNil(result.reason)
+            XCTAssertEqual(backend.presses.count, 1)
+            XCTAssertEqual(backend.presses.first?.targetID, "call-a")
+            XCTAssertEqual(backend.presses.first?.expectedState, initial)
+            XCTAssertEqual(backend.sampleCount, 7)
+            XCTAssertEqual(backend.waitCount, 5)
+        }
+    }
+
+    func testRepeatedToggleResolvesANewTargetForEachInvocation() throws {
+        let backend = FakeCameraBackend([
+            observed(.off), observed(.off), observed(.on), observed(.on),
+            observed(.on), observed(.on), observed(.off), observed(.off),
+        ])
+        let controller = CameraController(backend: backend)
+        let first = try controller.toggle()
+        let second = try controller.toggle()
+        XCTAssertTrue(first.success)
+        XCTAssertTrue(second.success)
+        XCTAssertEqual(first.state, .on)
+        XCTAssertEqual(second.state, .off)
+        XCTAssertEqual(backend.presses.map(\.expectedState), [.off, .on])
+    }
+
+    func testToggleDoesNotUndoAConcurrentChangeBeforePress() throws {
+        for initial in [CameraState.on, .off] {
+            let target: CameraState = initial == .on ? .off : .on
+            let backend = FakeCameraBackend([observed(initial), observed(target, ready: false)])
+            let result = try CameraController(backend: backend).toggle()
+            XCTAssertTrue(result.success)
+            XCTAssertEqual(result.state, target)
+            XCTAssertEqual(result.changed, false)
+            XCTAssertFalse(result.actionAttempted)
+            XCTAssertTrue(backend.presses.isEmpty)
+        }
+    }
+
+    func testToggleWaitsThroughDelayedCameraStartup() throws {
+        let backend = FakeCameraBackend(
+            [observed(.off), observed(.off)] +
+            Array(repeating: observed(.off, ready: false), count: 8) +
+            Array(repeating: observed(.on, ready: false), count: 8) +
+            [observed(.on), observed(.on)])
+        let result = try CameraController(backend: backend).toggle()
+        XCTAssertTrue(result.success)
+        XCTAssertEqual(result.state, .on)
+        XCTAssertEqual(result.changed, true)
+        XCTAssertEqual(backend.waitCount, 18)
+        XCTAssertEqual(backend.presses.count, 1)
+    }
+
+    func testToggleTimeoutNeverRetriesOrConfirmsAnUnsettledCamera() throws {
+        for observations in [
+            [observed(.off)],
+            [observed(.off), observed(.off), observed(.on, ready: false)],
+            Array(repeating: observed(.off), count: 21) + [observed(.on)],
+        ] {
+            let backend = FakeCameraBackend(observations)
+            assertUncertain(try CameraController(backend: backend).toggle(), reason: "verification_timeout")
+            XCTAssertEqual(backend.waitCount, 20)
+            XCTAssertEqual(backend.presses.count, 1)
+        }
+    }
+
+    func testToggleRejectsInvalidSelectionsInitiallyAndBeforePress() throws {
+        let cases: [(CameraObservation, String)] = [
+            (classified([]), "no_call_controls"),
+            (classified([call(1, .off), call(2, .off)]), "multiple_call_windows"),
+            (classified([call(1, .off, held: true)]), "all_calls_on_hold"),
+            (classified([call(1, .off)], complete: false), "inspection_incomplete"),
+            (classified([call(1, .unknown)]), "unrecognized_camera_label"),
+            (observed(.ambiguous), "camera_state_unavailable"),
+        ]
+        for (invalid, reason) in cases {
+            for observations in [[invalid], [observed(.off), invalid]] {
+                let backend = FakeCameraBackend(observations)
+                assertNotAttempted(try CameraController(backend: backend).toggle(), reason: reason)
+                XCTAssertTrue(backend.presses.isEmpty, reason)
+            }
+        }
+    }
+
+    func testToggleRejectsUnavailableControlsAndReplacementCalls() throws {
+        let cases: [([CameraObservation], String)] = [
+            ([observed(.off, id: nil)], "control_unavailable"),
+            ([observed(.off, ready: false)], "control_unavailable"),
+            ([observed(.off), observed(.off, ready: false)], "control_unavailable"),
+            ([observed(.off), observed(.on, id: "call-b")], "target_changed"),
+        ]
+        for (observations, reason) in cases {
+            let backend = FakeCameraBackend(observations)
+            assertNotAttempted(try CameraController(backend: backend).toggle(), reason: reason)
+            XCTAssertTrue(backend.presses.isEmpty)
+        }
+        let after = FakeCameraBackend([observed(.off), observed(.off), observed(.on, id: "call-b")])
+        assertUncertain(try CameraController(backend: after).toggle(), reason: "target_changed")
+        XCTAssertEqual(after.presses.count, 1)
+    }
+
+    func testToggleExcludesHeldCallsAndRetainsTheTargetAcrossWindowReordering() throws {
+        let backend = FakeCameraBackend([
+            classified([call(1, .off, held: true), call(2, .off)]),
+            classified([call(1, .off, held: true), call(3, .off)]),
+            classified([call(1, .off, held: true), call(3, .on)]),
+            classified([call(1, .off, held: true), call(3, .on)]),
+        ])
+        let result = try CameraController(backend: backend).toggle()
+        XCTAssertTrue(result.success)
+        XCTAssertEqual(result.windows, [WindowCameraStatus(window: 3, state: .on)])
+        XCTAssertEqual(result.excludedWindows, [ExcludedWindow(window: 1, reason: "on_hold")])
+        XCTAssertEqual(backend.presses.count, 1)
+    }
+
+    func testToggleRequiresPreservedFocusBeforeAndAfterPress() throws {
+        let failures: [(Bool?, String)] = [(false, "focus_changed"), (nil, "focus_unavailable")]
+        for (focus, reason) in failures {
+            for values in [[focus], [true, focus]] {
+                let backend = FakeCameraBackend([observed(.off)], focusValues: values)
+                assertNotAttempted(try CameraController(backend: backend).toggle(), reason: reason)
+                XCTAssertTrue(backend.presses.isEmpty)
+            }
+            for values in [[true, true, focus], [true, true, true, focus]] {
+                let backend = FakeCameraBackend([
+                    observed(.off), observed(.off), observed(.on, ready: false),
+                ], focusValues: values)
+                assertUncertain(try CameraController(backend: backend).toggle(), reason: reason)
+                XCTAssertEqual(backend.presses.count, 1)
+                XCTAssertLessThanOrEqual(backend.waitCount, 1)
+            }
+        }
+    }
+
+    func testTogglePreDispatchRejectionsDoNotRetry() throws {
+        for reason in ["preflight_failed", "target_changed", "camera_state_changed", "control_unavailable"] {
+            let backend = FakeCameraBackend([observed(.off)])
+            backend.rejectionReason = reason
+            assertNotAttempted(try CameraController(backend: backend).toggle(), reason: reason)
+            XCTAssertEqual(backend.presses.count, 1)
+            XCTAssertEqual(backend.waitCount, 0)
+        }
+    }
+
+    func testToggleReadErrorsDoNotCauseAnotherPress() throws {
+        for failureIndex in [0, 1, 2] {
+            let backend = FakeCameraBackend([observed(.off)])
+            backend.sampleErrorAt = failureIndex
+            if failureIndex < 2 {
+                XCTAssertThrowsError(try CameraController(backend: backend).toggle())
+                XCTAssertTrue(backend.presses.isEmpty)
+            } else {
+                assertUncertain(try CameraController(backend: backend).toggle(), reason: "action_outcome_unknown")
+                XCTAssertEqual(backend.presses.count, 1)
+            }
+        }
+    }
+
+    func testTogglePressErrorIsUncertainAndNeverRetried() throws {
+        let backend = FakeCameraBackend([observed(.off)])
+        backend.throwOnPress = true
+        assertUncertain(try CameraController(backend: backend).toggle(), reason: "action_outcome_unknown")
+        XCTAssertEqual(backend.presses.count, 1)
+        XCTAssertEqual(backend.sampleCount, 2)
+        XCTAssertEqual(backend.waitCount, 0)
+    }
+
     func testBothCommandsAreIdempotentEvenWhileControlIsDisabled() throws {
         for target in [CameraTarget.on, .off] {
             let backend = FakeCameraBackend([observed(target.state, ready: false)])

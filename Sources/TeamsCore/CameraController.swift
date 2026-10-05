@@ -49,13 +49,21 @@ struct CameraController {
     let backend: any CameraBackend
 
     func set(_ target: CameraTarget) throws -> CameraActionResult {
+        try perform { _ in target.state }
+    }
+
+    func toggle() throws -> CameraActionResult {
+        try perform { $0 == .on ? .off : .on }
+    }
+
+    private func perform(targetFor resolveTarget: (CameraState) -> CameraState) throws -> CameraActionResult {
         let controller = MediaActionController(
             unknownState: CameraState.unknown, knownStates: [.on, .off],
             stateUnavailableReason: "camera_state_unavailable", verificationSamples: 20,
             requiresReadyControlToConfirm: true, sample: backend.sample,
             press: backend.press, focusPreserved: backend.focusPreserved,
             waitForUpdate: backend.waitForUpdate)
-        let result = try controller.set(target.state)
+        let result = try controller.perform(targetFor: resolveTarget)
         return CameraActionResult(state: result.state, reason: result.reason,
                                   changed: result.changed, actionAttempted: result.actionAttempted,
                                   focusUnchanged: result.focusUnchanged,

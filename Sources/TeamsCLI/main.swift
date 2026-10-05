@@ -4,11 +4,11 @@ import TeamsCore
 private let usage = """
 Usage: teams <mic|camera> status [--json] [--window N]
        teams mic <mute|unmute|toggle> [--json]
-       teams camera <on|off> [--json]
+       teams camera <on|off|toggle> [--json]
 
 Read the microphone or camera state of an existing Microsoft Teams desktop call.
 Media commands set a desired state and verify it, acting only when a change is needed.
-Mic toggle requests the opposite of the first confirmed microphone state.
+Toggle requests the opposite of the first confirmed state for the chosen control.
 Calls on hold are excluded, including when selected with --window.
 Runs without activating Teams, sending keys, or showing permission dialogs.
 
@@ -34,7 +34,7 @@ private struct Options {
         guard arguments.count >= 2, let media = MediaCommand(rawValue: arguments[0]),
               let operation = Operation(rawValue: arguments[1]) else { throw UsageError.invalid }
         switch (media, operation) {
-        case (_, .status), (.mic, .mute), (.mic, .unmute), (.mic, .toggle), (.camera, .on), (.camera, .off): break
+        case (_, .status), (_, .toggle), (.mic, .mute), (.mic, .unmute), (.camera, .on), (.camera, .off): break
         default: throw UsageError.invalid
         }
         self.media = media
@@ -151,7 +151,8 @@ do {
                             action: options.operation.rawValue, changed: result.changed,
                             actionAttempted: result.actionAttempted, success: result.success)
         case .camera:
-            let result = try TeamsCameraCommands.set(options.operation == .on ? .on : .off)
+            let result = try options.operation == .toggle ? TeamsCameraCommands.toggle() :
+                TeamsCameraCommands.set(options.operation == .on ? .on : .off)
             output = Output(media: .camera, state: result.state.rawValue, reason: result.reason,
                             windows: result.windows.map { WindowOutput(window: $0.window, state: $0.state.rawValue) },
                             focusUnchanged: result.focusUnchanged, excludedWindows: result.excludedWindows,

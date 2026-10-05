@@ -1,8 +1,19 @@
 /// Serializes cooperating media commands and changes the selected camera button.
 public enum TeamsCameraCommands {
     public static func set(_ target: CameraTarget) throws -> CameraActionResult {
+        try perform { try $0.set(target) }
+    }
+
+    /// Inverts the first confirmed camera state within the shared command lock.
+    public static func toggle() throws -> CameraActionResult {
+        try perform { try $0.toggle() }
+    }
+
+    private static func perform(
+        _ operation: (CameraController) throws -> CameraActionResult
+    ) throws -> CameraActionResult {
         try TeamsMediaCommandSupport.perform({ focus in
-            try CameraController(backend: AccessibilityCameraBackend(focus: focus)).set(target)
+            try operation(CameraController(backend: AccessibilityCameraBackend(focus: focus)))
         }, onFinalizationFailure: { result, reason, focus in
             CameraActionResult(state: .unknown, reason: reason,
                                changed: result.actionAttempted ? nil : false,
