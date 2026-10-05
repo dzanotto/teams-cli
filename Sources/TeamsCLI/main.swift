@@ -5,12 +5,14 @@ private let usage = """
 Usage: teams <mic|camera> status [--json] [--window N]
        teams mic <mute|unmute|toggle> [--json]
        teams camera <on|off|toggle> [--json]
+       teams call end [--json]
 
 Read the microphone or camera state of an existing Microsoft Teams desktop call.
 Media commands set a desired state and verify it, acting only when a change is needed.
 Toggle requests the opposite of the first confirmed state for the chosen control.
+Call end leaves your call; Teams may change focus when the call window closes.
 Calls on hold are excluded, including when selected with --window.
-Runs without activating Teams, sending keys, or showing permission dialogs.
+Never explicitly activates Teams, sends keys, or shows permission dialogs.
 
   --json       Print machine-readable status and per-window results.
   --window N   Status only: inspect a window using its 1-based index from --json.
@@ -21,8 +23,8 @@ Exit codes: 0 known state; 2 unknown/ambiguous; 3 accessibility denied;
             64 invalid arguments.
 """
 
-private enum MediaCommand: String { case mic, camera }
-private enum Operation: String { case status, mute, unmute, toggle, on, off }
+private enum MediaCommand: String { case mic, camera, call }
+private enum Operation: String { case status, mute, unmute, toggle, on, off, end }
 
 private struct Options {
     let media: MediaCommand
@@ -34,7 +36,8 @@ private struct Options {
         guard arguments.count >= 2, let media = MediaCommand(rawValue: arguments[0]),
               let operation = Operation(rawValue: arguments[1]) else { throw UsageError.invalid }
         switch (media, operation) {
-        case (_, .status), (_, .toggle), (.mic, .mute), (.mic, .unmute), (.camera, .on), (.camera, .off): break
+        case (.mic, .status), (.camera, .status), (.mic, .toggle), (.camera, .toggle),
+             (.mic, .mute), (.mic, .unmute), (.camera, .on), (.camera, .off), (.call, .end): break
         default: throw UsageError.invalid
         }
         self.media = media
@@ -78,7 +81,7 @@ private struct Output: Encodable {
     var success: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case microphone, camera, reason, windows, action, changed, success
+        case microphone, camera, call, reason, windows, action, changed, success
         case focusUnchanged = "focus_unchanged"
         case excludedWindows = "excluded_windows"
         case actionAttempted = "action_attempted"
@@ -86,7 +89,13 @@ private struct Output: Encodable {
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(state, forKey: media == .mic ? .microphone : .camera)
+        let stateKey: CodingKeys
+        switch media {
+        case .mic: stateKey = .microphone
+        case .camera: stateKey = .camera
+        case .call: stateKey = .call
+        }
+        try container.encode(state, forKey: stateKey)
         try container.encodeIfPresent(reason, forKey: .reason)
         try container.encode(windows, forKey: .windows)
         try container.encodeIfPresent(focusUnchanged, forKey: .focusUnchanged)
@@ -121,7 +130,9 @@ private func emit(_ output: Output, json: Bool) {
         if let reason = output.reason { stderr("Reason: \(reason)") }
         if output.state == "ambiguous" {
             for window in output.windows { stderr("Window \(window.window): \(window.state)") }
-            stderr("Use --window N to read one window. Indices can change when Teams windows open or close.")
+            if output.media != .call {
+                stderr("Use --window N to read one window. Indices can change when Teams windows open or close.")
+            }
         }
     }
 }
@@ -158,6 +169,13 @@ do {
                             focusUnchanged: result.focusUnchanged, excludedWindows: result.excludedWindows,
                             action: options.operation.rawValue, changed: result.changed,
                             actionAttempted: result.actionAttempted, success: result.success)
+        case .call:
+            let result = try TeamsCallCommands.end()
+            output = Output(media: .call, state: result.state.rawValue, reason: result.reason,
+                            windows: result.windows.map { WindowOutput(window: $0.window, state: $0.state.rawValue) },
+                            focusUnchanged: result.focusUnchanged, excludedWindows: result.excludedWindows,
+                            action: options.operation.rawValue, changed: result.changed,
+                            actionAttempted: result.actionAttempted, success: result.success)
         }
         emit(output, json: options.json)
         exit(output.success == true ? 0 : 6)
@@ -181,10 +199,13 @@ do {
         output = Output(media: .camera, state: assessment.state.rawValue, reason: assessment.reason,
                         windows: assessment.windows.map { WindowOutput(window: $0.window, state: $0.state.rawValue) },
                         focusUnchanged: snapshot.focusUnchanged, excludedWindows: assessment.excludedWindows)
+    case .call:
+        throw UsageError.invalid
     }
     emit(output, json: options.json)
     exit(["muted", "unmuted", "on", "off"].contains(output.state) ? 0 : 2)
 } catch {
+    if error is UsageError { stderr(usage); exit(64) }
     let status: String
     let reason: String
     let code: Int32

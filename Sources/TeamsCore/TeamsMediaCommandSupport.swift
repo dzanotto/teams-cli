@@ -2,11 +2,26 @@ import AppKit
 import ApplicationServices
 import Darwin
 
-/// One lifecycle for both controls: lock, observe focus, expose AX, act, restore, verify.
+/// Shared lifecycle: lock, observe focus, expose AX, act, restore, finalize.
 enum TeamsMediaCommandSupport {
     static func perform<Result>(
         _ operation: (FocusMonitor) throws -> Result,
         onFinalizationFailure: (Result, String, Bool?) -> Result
+    ) throws -> Result {
+        try perform(operation, onFinalization: { result, restored, focus in
+            guard restored, focus == true else {
+                let reason = !restored ? "accessibility_cleanup_failed" :
+                    (focus == nil ? "focus_unavailable" : "focus_changed")
+                return onFinalizationFailure(result, reason, focus)
+            }
+            return result
+        })
+    }
+
+    /// Call end permits Teams to change focus, but still observes and reports it.
+    static func perform<Result>(
+        _ operation: (FocusMonitor) throws -> Result,
+        onFinalization: (Result, Bool, Bool?) -> Result
     ) throws -> Result {
         guard AXIsProcessTrusted() else { throw TeamsReadError.accessibilityDenied }
         let commandLock = try MediaCommandLock()
@@ -36,12 +51,7 @@ enum TeamsMediaCommandSupport {
         }
         let restored = exposure.restore()
         let finalFocus = focus.preserved()
-        guard restored, finalFocus == true else {
-            let reason = !restored ? "accessibility_cleanup_failed" :
-                (finalFocus == nil ? "focus_unavailable" : "focus_changed")
-            return onFinalizationFailure(result, reason, finalFocus)
-        }
-        return result
+        return onFinalization(result, restored, finalFocus)
     }
 }
 
@@ -49,7 +59,7 @@ private final class MediaCommandLock {
     private var descriptor: Int32
 
     init() throws {
-        // Retain the original microphone lock path so camera commands also serialize
+        // Retain the original microphone lock path so camera/call commands also serialize
         // with older microphone binaries. Keep the inode when releasing the lock.
         let path = "/tmp/teams-cli-microphone-\(getuid()).lock"
         descriptor = open(path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))

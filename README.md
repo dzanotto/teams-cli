@@ -1,9 +1,10 @@
 # Teams CLI for macOS
 
 Reads microphone mute and camera on/off states in the Microsoft Teams desktop app
-and provides microphone mute/unmute/toggle and camera on/off/toggle commands. It never activates Teams,
-raises its windows, sends keyboard shortcuts, or restores focus as a workaround.
-Leaving a call is future work.
+and provides microphone mute/unmute/toggle, camera on/off/toggle, and call-end commands.
+It does not explicitly activate Teams, raise windows, send keyboard shortcuts,
+or restore focus. Media commands enforce focus checks; leaving a call allows
+Teams to change focus.
 
 ## Build and run
 
@@ -23,6 +24,7 @@ swift build -c release
 .build/release/teams camera on --json
 .build/release/teams camera off --json
 .build/release/teams camera toggle --json
+.build/release/teams call end --json
 ```
 
 The executable is already built at `.build/release/teams` in this workspace.
@@ -115,7 +117,7 @@ Unavailable setup or unverified cleanup is reported as a failure. Status command
 do not write this attribute. Cleanup finishes before the final focus check;
 deferred cleanup cannot issue later writes.
 
-Actions use activation and focused-window notifications in addition to focus
+Media actions use activation and focused-window notifications in addition to focus
 snapshots. Unavailable focus evidence or an observed focus change causes refusal
 before dispatch, or an unverified result afterward. Nothing attempts to restore
 focus. Notifications are best effort: the monitor detects reported changes but
@@ -130,13 +132,13 @@ JSON retains the corresponding `microphone` or `camera` status fields and adds:
 | `action_attempted` | An `AXPress` was dispatched or may have been dispatched |
 | `changed` | `false` for a no-op/refusal, `true` after verified change, `null` when an attempted action's outcome is uncertain |
 
-Microphone and camera commands share a per-user process lock so concurrent CLI
+Microphone, camera, and call-end commands share a per-user process lock so concurrent CLI
 invocations cannot overlap actions or accessibility setup/cleanup.
 A second invocation returns `command_in_progress`
 without waiting or pressing. The lock file stays in `/tmp`; the OS releases the
 lock when the process exits. Action sampling has an eight-second shared budget
 with at most eight verification observations for microphone changes and twenty
-for camera changes; observations are spaced by 150 ms waits, and in-flight AX
+for camera changes and call end; observations are spaced by 150 ms waits, and in-flight AX
 calls add overhead.
 
 Teams exposes a toggle rather than an atomic set-state API. Fresh reads and the
@@ -145,6 +147,41 @@ between a check and the press. AX object identity also cannot prove a meeting's
 identity if Teams reuses the same objects. No handles persist between commands.
 On an unverified outcome, inspect status and the situation before issuing a new
 command.
+
+## Leaving a call
+
+`teams call end` presses the Leave button for your one active, non-held call.
+It leaves your participation; it does not choose Teams' "End meeting for all"
+action. It requires a recognized Leave label, one enabled `hangup-button` with
+`AXPress`, and an unambiguous call. Missing controls, all-held calls, duplicate
+Leave buttons, or multiple active calls cause refusal. `--window` is not supported
+for actions. This command does not resume held calls or dismiss confirmation dialogs.
+
+Focus changes are allowed by default for this command, as requested. Teams can
+bring its main window forward when the call window closes. `focus_unchanged` is
+reported when available, but a focus change or unavailable focus evidence does
+not make an otherwise verified call end fail. Microphone and camera commands
+retain their existing focus requirements.
+
+The command pins the Teams process generation and exact call-window/Leave-button
+objects, rereads them before dispatch, and sends at most one press. To report
+`ended`, two consecutive complete scans must show that the pinned call window
+has disappeared, the original Teams process still has another inspectable window,
+and no non-held call controls remain. Held windows remain listed in
+`excluded_windows`. No call controls at startup do not mean "already ended".
+
+Missing controls alone, an empty window list, a replaced process or call,
+incomplete reads, and a timeout cannot confirm completion. A call hosted inside
+a window that remains open after leaving may therefore end successfully in Teams
+while the CLI returns an unverified result. An uncertain result never triggers
+another press or attempts to rejoin the call.
+
+With `--json`, the status key is `call`, the action is `end`, and successful
+completion reports `call: ended`, `success: true`, `changed: true`, and
+`action_attempted: true`. An uncertain attempted action reports `call: unknown`,
+`success: false`, and `changed: null`. Accessibility cleanup must still succeed.
+The shared lock, setup/cleanup lifecycle, eight-second sampling budget, and
+bounded verification used by media commands also apply to call end.
 
 ## Accessibility permission
 
@@ -164,7 +201,7 @@ permission are requested by this program.
 
 | Code | Output | Meaning |
 | --- | --- | --- |
-| 0 | `muted` / `unmuted` / `on` / `off` | A recognized media control in one call window |
+| 0 | `muted` / `unmuted` / `on` / `off` / `ended` | A recognized media state or verified call end |
 | 2 | `unknown` / `ambiguous` | Inconclusive read or multiple possible controls |
 | 3 | `permission_denied` | Accessibility permission unavailable |
 | 4 | `not_running` | Teams was not found after the permission check |
@@ -203,6 +240,9 @@ observations from a partial scan, not definitive overall status.
   `Disattiva microfono`, `Attiva videocamera`, and `Disattiva videocamera`
   mappings are unit-tested but have not been verified against an Italian Teams
   installation. Other labels return `unknown`.
+- Call end accepts exact `Leave`, `Hang up`, `Esci`, and `Abbandona` labels
+  (including supported shortcut suffixes). These mappings are unit-tested.
+  Other labels are refused; manual command validation is recorded below.
 - Missing controls are `unknown`, never assumed muted or out of a call. Hidden
   or minimized content, unsupported Teams versions, an uninitialized web tree,
   or a changing UI can make a read inconclusive. Retrying may help after the
@@ -210,8 +250,8 @@ observations from a partial scan, not definitive overall status.
 - Traversal has a 12,000-node cap, depth limit, shared eight-second scan budget,
   and short per-message timeouts. In-flight Accessibility requests and setup
   add some overhead; this is not a hard real-time deadline.
-- Status commands perform no call actions. Media changes use only the exact
-  microphone or camera button's `AXPress` action. There is no activation, window raising,
+- Status commands perform no call actions. Changes use only the exact
+  microphone, camera, or Leave button's `AXPress` action. There is no explicit activation, window raising,
   key/mouse event injection, network request, or logging of chat/meeting text.
 - Uses observed Teams UI identifiers, not a supported Microsoft control API;
   future Teams updates may require changes. The older third-party integration
@@ -223,7 +263,7 @@ observations from a partial scan, not definitive overall status.
 swift test
 ```
 
-The 98 automated tests cover label inversion, language/shortcut handling, pre-join and
+The 122 automated tests cover label inversion, language/shortcut handling, pre-join and
 participant exclusions, conflicting/duplicate controls, multiple call windows,
 unknown labels, incomplete reads, and held-call exclusion (including all-held
 and explicitly selected held windows). Camera tests additionally check that
@@ -238,6 +278,9 @@ held-call exclusion, target identity, unavailable states/controls, focus checks,
 stable confirmation, and uncertain outcomes without retries.
 Camera toggle also waits through delayed startup and requires two consecutive
 observations with the desired state and a ready camera control after a press.
+Call-end tests cover Leave labels, refusal of "End meeting for all", call selection,
+held calls, target races, two consecutive closure observations, uncertain outcomes,
+the focus-change exception, cleanup failures, and the no-retry rule.
 
 Live validation on 2026-10-05: macOS 27.0.1, Apple Silicon, Teams
 26213.1006.5011.1671. The release executable read two call windows with different
@@ -305,3 +348,11 @@ Camera toggle builds successfully, and all 98 tests pass (including 12 new
 camera-toggle tests). Release CLI checks passed for ten help forms and fourteen
 invalid argument combinations. The user subsequently tested camera toggle manually
 and confirmed that it works. No automated live camera toggle was run.
+
+Call end builds successfully, and all 122 tests pass (including 24 new call-end
+tests). Release CLI checks passed for eleven help forms and twenty-seven invalid
+argument combinations. Action-refusal checks verified the JSON fields for call,
+microphone, and camera commands and plain-text call output; the sandbox returned
+`accessibility_permission_required` before any action or accessibility setup.
+The user subsequently tested call end manually and confirmed that it works.
+No automated live call-end test was run.

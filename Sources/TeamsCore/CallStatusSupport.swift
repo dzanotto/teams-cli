@@ -1,6 +1,6 @@
 import Foundation
 
-/// The same call eligibility rules apply to microphone and camera reads.
+/// The same call eligibility rules apply to media controls and leaving a call.
 struct CallWindowSelection {
     let active: [WindowSnapshot]
     let excludedWindows: [ExcludedWindow]

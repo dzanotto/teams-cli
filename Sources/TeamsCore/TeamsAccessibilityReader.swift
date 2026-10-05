@@ -10,6 +10,7 @@ public enum TeamsReadError: Error {
 public enum MediaControl: String {
     case microphone = "microphone-button"
     case camera = "video-button"
+    case call = "hangup-button"
 }
 
 public struct TeamsSnapshot {
@@ -30,6 +31,7 @@ struct CallWindowHandles {
         switch control {
         case .microphone: return microphones
         case .camera: return cameras
+        case .call: return hangups
         }
     }
 }
