@@ -3,11 +3,12 @@ import TeamsCore
 
 private let usage = """
 Usage: teams <mic|camera> status [--json] [--window N]
-       teams mic <mute|unmute> [--json]
+       teams mic <mute|unmute|toggle> [--json]
        teams camera <on|off> [--json]
 
 Read the microphone or camera state of an existing Microsoft Teams desktop call.
 Media commands set a desired state and verify it, acting only when a change is needed.
+Mic toggle requests the opposite of the first confirmed microphone state.
 Calls on hold are excluded, including when selected with --window.
 Runs without activating Teams, sending keys, or showing permission dialogs.
 
@@ -21,7 +22,7 @@ Exit codes: 0 known state; 2 unknown/ambiguous; 3 accessibility denied;
 """
 
 private enum MediaCommand: String { case mic, camera }
-private enum Operation: String { case status, mute, unmute, on, off }
+private enum Operation: String { case status, mute, unmute, toggle, on, off }
 
 private struct Options {
     let media: MediaCommand
@@ -33,7 +34,7 @@ private struct Options {
         guard arguments.count >= 2, let media = MediaCommand(rawValue: arguments[0]),
               let operation = Operation(rawValue: arguments[1]) else { throw UsageError.invalid }
         switch (media, operation) {
-        case (_, .status), (.mic, .mute), (.mic, .unmute), (.camera, .on), (.camera, .off): break
+        case (_, .status), (.mic, .mute), (.mic, .unmute), (.mic, .toggle), (.camera, .on), (.camera, .off): break
         default: throw UsageError.invalid
         }
         self.media = media
@@ -142,7 +143,8 @@ do {
         let output: Output
         switch options.media {
         case .mic:
-            let result = try TeamsMicrophoneCommands.set(options.operation == .mute ? .muted : .unmuted)
+            let result = try options.operation == .toggle ? TeamsMicrophoneCommands.toggle() :
+                TeamsMicrophoneCommands.set(options.operation == .mute ? .muted : .unmuted)
             output = Output(media: .mic, state: result.state.rawValue, reason: result.reason,
                             windows: result.windows.map { WindowOutput(window: $0.window, state: $0.state.rawValue) },
                             focusUnchanged: result.focusUnchanged, excludedWindows: result.excludedWindows,

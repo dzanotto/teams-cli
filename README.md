@@ -1,7 +1,7 @@
 # Teams CLI for macOS
 
 Reads microphone mute and camera on/off states in the Microsoft Teams desktop app
-and provides explicit microphone mute/unmute and camera on/off commands. It never activates Teams,
+and provides microphone mute/unmute/toggle and camera on/off commands. It never activates Teams,
 raises its windows, sends keyboard shortcuts, or restores focus as a workaround.
 Leaving a call is future work.
 
@@ -19,6 +19,7 @@ swift build -c release
 .build/release/teams camera status --json
 .build/release/teams mic mute --json
 .build/release/teams mic unmute --json
+.build/release/teams mic toggle --json
 .build/release/teams camera on --json
 .build/release/teams camera off --json
 ```
@@ -81,7 +82,17 @@ attempts to restore focus, since doing so could override a deliberate user actio
 `teams mic mute`, `teams mic unmute`, `teams camera on`, and `teams camera off`
 request a specific state. When that state is already present, they succeed
 without pressing anything, even if the button is disabled. This no-op confirms
-the existing Teams-reported state. All four commands require exactly one non-held call
+the existing Teams-reported state.
+
+`teams mic toggle` requests the opposite of the first confirmed microphone state:
+muted becomes unmuted, and unmuted becomes muted. The read and change run under
+the same process lock and checks as mute/unmute. The desired state stays fixed
+through rechecks: if someone else reaches it before the command's pre-press read,
+the command succeeds without pressing (`changed: false`, `action_attempted: false`).
+A later state change detected at dispatch is refused. Each new invocation reads
+the current state again; toggle is not idempotent.
+
+All media action commands require exactly one non-held call
 with a known state for the requested control. `--window` is deliberately
 limited to status reads because its indices can reorder between invocations.
 
@@ -112,7 +123,7 @@ JSON retains the corresponding `microphone` or `camera` status fields and adds:
 
 | Field | Meaning |
 | --- | --- |
-| `action` | `mute`, `unmute`, `on`, or `off` |
+| `action` | `mute`, `unmute`, `toggle`, `on`, or `off` |
 | `success` | Requested state confirmed with focus preserved |
 | `action_attempted` | An `AXPress` was dispatched or may have been dispatched |
 | `changed` | `false` for a no-op/refusal, `true` after verified change, `null` when an attempted action's outcome is uncertain |
@@ -210,7 +221,7 @@ observations from a partial scan, not definitive overall status.
 swift test
 ```
 
-The 74 automated tests cover label inversion, language/shortcut handling, pre-join and
+The 86 automated tests cover label inversion, language/shortcut handling, pre-join and
 participant exclusions, conflicting/duplicate controls, multiple call windows,
 unknown labels, incomplete reads, and held-call exclusion (including all-held
 and explicitly selected held windows). Camera tests additionally check that
@@ -220,6 +231,9 @@ disabled controls, focus refusal/loss, uncertain errors, stable confirmation,
 pre-dispatch rejection, and the no-retry rule.
 Camera-controller tests also exercise delayed startup and temporarily disabled
 controls without repeating the press or confirming success prematurely.
+Toggle tests cover both directions, repeated invocations, concurrent state changes,
+held-call exclusion, target identity, unavailable states/controls, focus checks,
+stable confirmation, and uncertain outcomes without retries.
 
 Live validation on 2026-10-05: macOS 27.0.1, Apple Silicon, Teams
 26213.1006.5011.1671. The release executable read two call windows with different
@@ -277,3 +291,8 @@ nine invalid operation/option combinations. The rebuilt executable read camera
 `on` and microphone `muted`, with `focus_unchanged: true` for both status commands.
 The user subsequently tested camera on/off manually and confirmed that everything
 works. No automated live camera cycle was run.
+
+Microphone toggle builds successfully, and all 86 tests pass (including 12 new
+toggle tests). Release CLI checks passed for nine help forms and ten invalid
+argument combinations. The user subsequently tested microphone toggle manually
+and confirmed that it works. No automated live microphone toggle was run.

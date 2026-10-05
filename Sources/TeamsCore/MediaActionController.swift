@@ -38,6 +38,12 @@ struct MediaActionController<Observation: MediaObservation> {
     let waitForUpdate: () -> Void
 
     func set(_ target: Observation.State) throws -> MediaActionOutcome<Observation> {
+        try perform { _ in target }
+    }
+
+    /// Resolve the desired state once, from the first validated observation.
+    /// Rechecks retain that target so a concurrent change cannot reverse the intent.
+    func perform(targetFor resolveTarget: (Observation.State) -> Observation.State) throws -> MediaActionOutcome<Observation> {
         var observation = try sample()
         var focus = focusPreserved()
 
@@ -55,6 +61,7 @@ struct MediaActionController<Observation: MediaObservation> {
             return result(state: unknownState, reason: "control_unavailable")
         }
         if let reason = focusFailure(focus) { return result(state: unknownState, reason: reason) }
+        let target = resolveTarget(observation.state)
         if observation.state == target {
             return result(state: target, reason: nil, success: true)
         }

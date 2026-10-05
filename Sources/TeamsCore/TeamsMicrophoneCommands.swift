@@ -8,8 +8,19 @@ public enum MicrophoneCommandError: Error {
 /// Serializes cooperating media commands and changes the selected microphone button.
 public enum TeamsMicrophoneCommands {
     public static func set(_ target: MicrophoneTarget) throws -> MicrophoneActionResult {
+        try perform { try $0.set(target) }
+    }
+
+    /// Inverts the first confirmed microphone state within the shared command lock.
+    public static func toggle() throws -> MicrophoneActionResult {
+        try perform { try $0.toggle() }
+    }
+
+    private static func perform(
+        _ operation: (MicrophoneController) throws -> MicrophoneActionResult
+    ) throws -> MicrophoneActionResult {
         try TeamsMediaCommandSupport.perform({ focus in
-            try MicrophoneController(backend: AccessibilityMicrophoneBackend(focus: focus)).set(target)
+            try operation(MicrophoneController(backend: AccessibilityMicrophoneBackend(focus: focus)))
         }, onFinalizationFailure: { result, reason, focus in
             MicrophoneActionResult(state: .unknown, reason: reason,
                                    changed: result.actionAttempted ? nil : false,

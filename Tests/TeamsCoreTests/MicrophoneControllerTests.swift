@@ -2,6 +2,180 @@ import XCTest
 @testable import TeamsCore
 
 final class MicrophoneControllerTests: XCTestCase {
+    func testToggleInBothDirectionsPressesOnceAndConfirmsTwoSamples() throws {
+        for initial in [MicrophoneState.muted, .unmuted] {
+            let target: MicrophoneState = initial == .muted ? .unmuted : .muted
+            let backend = FakeMicrophoneBackend([
+                observed(initial), observed(initial), observed(target), observed(target),
+            ])
+            let result = try MicrophoneController(backend: backend).toggle()
+            XCTAssertTrue(result.success)
+            XCTAssertEqual(result.state, target)
+            XCTAssertEqual(result.changed, true)
+            XCTAssertTrue(result.actionAttempted)
+            XCTAssertEqual(result.focusUnchanged, true)
+            XCTAssertNil(result.reason)
+            XCTAssertEqual(backend.presses.count, 1)
+            XCTAssertEqual(backend.presses.first?.targetID, "call-a")
+            XCTAssertEqual(backend.presses.first?.expectedState, initial)
+            XCTAssertEqual(backend.sampleCount, 4)
+            XCTAssertEqual(backend.waitCount, 2)
+        }
+    }
+
+    func testRepeatedToggleResolvesANewTargetForEachInvocation() throws {
+        let backend = FakeMicrophoneBackend([
+            observed(.muted), observed(.muted), observed(.unmuted), observed(.unmuted),
+            observed(.unmuted), observed(.unmuted), observed(.muted), observed(.muted),
+        ])
+        let controller = MicrophoneController(backend: backend)
+        let first = try controller.toggle()
+        let second = try controller.toggle()
+        XCTAssertTrue(first.success)
+        XCTAssertTrue(second.success)
+        XCTAssertEqual(first.state, .unmuted)
+        XCTAssertEqual(second.state, .muted)
+        XCTAssertEqual(backend.presses.map(\.expectedState), [.muted, .unmuted])
+    }
+
+    func testToggleDoesNotUndoAConcurrentChangeBeforePress() throws {
+        for initial in [MicrophoneState.muted, .unmuted] {
+            let target: MicrophoneState = initial == .muted ? .unmuted : .muted
+            let backend = FakeMicrophoneBackend([
+                observed(initial), observed(target, canPress: false),
+            ])
+            let result = try MicrophoneController(backend: backend).toggle()
+            XCTAssertTrue(result.success)
+            XCTAssertEqual(result.state, target)
+            XCTAssertEqual(result.changed, false)
+            XCTAssertFalse(result.actionAttempted)
+            XCTAssertTrue(backend.presses.isEmpty)
+        }
+    }
+
+    func testToggleRejectsInvalidSelectionsInitiallyAndBeforePress() throws {
+        let cases: [(MicrophoneObservation, String)] = [
+            (classified([]), "no_call_controls"),
+            (classified([call(1, .muted), call(2, .muted)]), "multiple_call_windows"),
+            (classified([call(1, .muted, held: true)]), "all_calls_on_hold"),
+            (classified([call(1, .muted)], complete: false), "inspection_incomplete"),
+            (classified([call(1, .unknown)]), "unrecognized_microphone_label"),
+            (observed(.ambiguous), "microphone_state_unavailable"),
+        ]
+        for (invalid, reason) in cases {
+            for observations in [[invalid], [observed(.muted), invalid]] {
+                let backend = FakeMicrophoneBackend(observations)
+                assertNotAttempted(try MicrophoneController(backend: backend).toggle(), reason: reason)
+                XCTAssertTrue(backend.presses.isEmpty, reason)
+            }
+        }
+    }
+
+    func testToggleExcludesHeldCallsAndPreservesTheActiveTargetAcrossWindowReordering() throws {
+        let backend = FakeMicrophoneBackend([
+            classified([call(1, .muted, held: true), call(2, .unmuted)]),
+            classified([call(1, .muted, held: true), call(3, .unmuted)]),
+            classified([call(1, .muted, held: true), call(3, .muted)]),
+            classified([call(1, .muted, held: true), call(3, .muted)]),
+        ])
+        let result = try MicrophoneController(backend: backend).toggle()
+        XCTAssertTrue(result.success)
+        XCTAssertEqual(result.windows, [WindowMicrophoneStatus(window: 3, state: .muted)])
+        XCTAssertEqual(result.excludedWindows, [ExcludedWindow(window: 1, reason: "on_hold")])
+        XCTAssertEqual(backend.presses.count, 1)
+    }
+
+    func testToggleRejectsMissingIdentityAndDisabledControls() throws {
+        let cases: [[MicrophoneObservation]] = [
+            [observed(.muted, id: nil)],
+            [observed(.muted, canPress: false)],
+            [observed(.muted), observed(.muted, canPress: false)],
+        ]
+        for observations in cases {
+            let backend = FakeMicrophoneBackend(observations)
+            assertNotAttempted(try MicrophoneController(backend: backend).toggle(), reason: "control_unavailable")
+            XCTAssertTrue(backend.presses.isEmpty)
+        }
+    }
+
+    func testToggleRejectsReplacementCallsBeforeAndAfterPress() throws {
+        let before = FakeMicrophoneBackend([observed(.muted), observed(.unmuted, id: "call-b")])
+        assertNotAttempted(try MicrophoneController(backend: before).toggle(), reason: "target_changed")
+        XCTAssertTrue(before.presses.isEmpty)
+
+        let after = FakeMicrophoneBackend([
+            observed(.muted), observed(.muted), observed(.unmuted, id: "call-b"),
+        ])
+        assertUncertain(try MicrophoneController(backend: after).toggle(), reason: "target_changed")
+        XCTAssertEqual(after.presses.count, 1)
+    }
+
+    func testToggleRequiresPreservedFocusBeforeAndAfterPress() throws {
+        let failures: [Bool?] = [false, nil]
+        for badFocus in failures {
+            let reason = badFocus == nil ? "focus_unavailable" : "focus_changed"
+            for focusValues in [[badFocus], [true, badFocus]] {
+                let backend = FakeMicrophoneBackend([observed(.muted)], focusValues: focusValues)
+                assertNotAttempted(try MicrophoneController(backend: backend).toggle(), reason: reason)
+                XCTAssertTrue(backend.presses.isEmpty)
+            }
+            for focusValues in [[true, true, badFocus], [true, true, true, badFocus]] {
+                let backend = FakeMicrophoneBackend([
+                    observed(.muted), observed(.muted), observed(.unmuted), observed(.unmuted),
+                ], focusValues: focusValues)
+                assertUncertain(try MicrophoneController(backend: backend).toggle(), reason: reason)
+                XCTAssertEqual(backend.presses.count, 1)
+            }
+        }
+    }
+
+    func testToggleRequiresConsecutiveMatchesWithoutRepeatingThePress() throws {
+        let backend = FakeMicrophoneBackend([
+            observed(.muted), observed(.muted), observed(.unmuted), observed(.muted),
+            observed(.unmuted), observed(.unmuted),
+        ])
+        let result = try MicrophoneController(backend: backend).toggle()
+        XCTAssertTrue(result.success)
+        XCTAssertEqual(result.state, .unmuted)
+        XCTAssertEqual(backend.waitCount, 4)
+        XCTAssertEqual(backend.presses.count, 1)
+    }
+
+    func testToggleTimeoutAndUncertainPressAreNeverRetried() throws {
+        let timeout = FakeMicrophoneBackend([observed(.muted)])
+        assertUncertain(try MicrophoneController(backend: timeout).toggle(), reason: "verification_timeout")
+        XCTAssertEqual(timeout.presses.count, 1)
+        XCTAssertEqual(timeout.waitCount, 8)
+
+        let pressError = FakeMicrophoneBackend([observed(.muted)])
+        pressError.throwOnPress = true
+        assertUncertain(try MicrophoneController(backend: pressError).toggle(), reason: "action_outcome_unknown")
+        XCTAssertEqual(pressError.presses.count, 1)
+        XCTAssertEqual(pressError.sampleCount, 2)
+    }
+
+    func testToggleReadErrorsDoNotCauseAnotherPress() throws {
+        for failureIndex in [0, 1, 2] {
+            let backend = FakeMicrophoneBackend([observed(.muted)])
+            backend.sampleErrorAt = failureIndex
+            if failureIndex < 2 {
+                XCTAssertThrowsError(try MicrophoneController(backend: backend).toggle())
+                XCTAssertTrue(backend.presses.isEmpty)
+            } else {
+                assertUncertain(try MicrophoneController(backend: backend).toggle(), reason: "action_outcome_unknown")
+                XCTAssertEqual(backend.presses.count, 1)
+            }
+        }
+    }
+
+    func testToggleRejectsALastMomentStateChangeWithoutRetrying() throws {
+        let backend = FakeMicrophoneBackend([observed(.muted)])
+        backend.rejectionReason = "microphone_state_changed"
+        assertNotAttempted(try MicrophoneController(backend: backend).toggle(), reason: "microphone_state_changed")
+        XCTAssertEqual(backend.presses.count, 1)
+        XCTAssertEqual(backend.waitCount, 0)
+    }
+
     func testBothCommandsAreIdempotentEvenWhenTheControlCannotBePressed() throws {
         for target in [MicrophoneTarget.muted, .unmuted] {
             let backend = FakeMicrophoneBackend([observed(target.state, canPress: false)])

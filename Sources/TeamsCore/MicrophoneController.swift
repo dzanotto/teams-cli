@@ -43,18 +43,26 @@ extension MicrophoneObservation: MediaObservation {
     var windowStates: [MicrophoneState] { assessment.windows.map(\.state) }
 }
 
-/// Sets a known state through Teams' toggle control without retrying an action.
+/// Sets or inverts a known state through Teams' toggle control without retrying an action.
 struct MicrophoneController {
     let backend: any MicrophoneBackend
 
     func set(_ target: MicrophoneTarget) throws -> MicrophoneActionResult {
+        try perform { _ in target.state }
+    }
+
+    func toggle() throws -> MicrophoneActionResult {
+        try perform { $0 == .muted ? .unmuted : .muted }
+    }
+
+    private func perform(targetFor resolveTarget: (MicrophoneState) -> MicrophoneState) throws -> MicrophoneActionResult {
         let controller = MediaActionController(
             unknownState: MicrophoneState.unknown, knownStates: [.muted, .unmuted],
             stateUnavailableReason: "microphone_state_unavailable", verificationSamples: 8,
             requiresReadyControlToConfirm: false, sample: backend.sample,
             press: backend.press, focusPreserved: backend.focusPreserved,
             waitForUpdate: backend.waitForUpdate)
-        let result = try controller.set(target.state)
+        let result = try controller.perform(targetFor: resolveTarget)
         return MicrophoneActionResult(state: result.state, reason: result.reason,
                                       changed: result.changed, actionAttempted: result.actionAttempted,
                                       focusUnchanged: result.focusUnchanged,
