@@ -23,7 +23,15 @@ struct CallWindowHandles {
     let application: NSRunningApplication
     let window: AXUIElement
     var microphones: [AXUIElement] = []
+    var cameras: [AXUIElement] = []
     var hangups: [AXUIElement] = []
+
+    func buttons(for control: MediaControl) -> [AXUIElement] {
+        switch control {
+        case .microphone: return microphones
+        case .camera: return cameras
+        }
+    }
 }
 
 /// Reads controls only: no activation, events, AX actions, attribute writes, or permission prompts.
@@ -109,6 +117,7 @@ public final class TeamsAccessibilityReader {
                             let label = text.values.compactMap { $0 as? String }.first(where: { !$0.isEmpty }) ?? ""
                             controls.append(ControlSnapshot(role: role, identifier: identifier, label: label))
                             if identifier == "microphone-button" { windowHandles.microphones.append(node) }
+                            if identifier == "video-button" { windowHandles.cameras.append(node) }
                             if identifier == "hangup-button" { windowHandles.hangups.append(node) }
                         }
                     }

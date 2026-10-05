@@ -1,9 +1,9 @@
 # Teams CLI for macOS
 
 Reads microphone mute and camera on/off states in the Microsoft Teams desktop app
-and provides explicit microphone mute/unmute commands. It never activates Teams,
+and provides explicit microphone mute/unmute and camera on/off commands. It never activates Teams,
 raises its windows, sends keyboard shortcuts, or restores focus as a workaround.
-Camera controls and leaving a call are future work.
+Leaving a call is future work.
 
 ## Build and run
 
@@ -19,6 +19,8 @@ swift build -c release
 .build/release/teams camera status --json
 .build/release/teams mic mute --json
 .build/release/teams mic unmute --json
+.build/release/teams camera on --json
+.build/release/teams camera off --json
 ```
 
 The executable is already built at `.build/release/teams` in this workspace.
@@ -74,18 +76,23 @@ inspected. This is an endpoint comparison, not continuous monitoring; a user
 switching windows while the command runs may make it `false`. The command never
 attempts to restore focus, since doing so could override a deliberate user action.
 
-## Mute and unmute
+## Microphone and camera controls
 
-`teams mic mute` and `teams mic unmute` request a specific state. When that state
-is already present, they succeed without pressing anything. Both commands require
-exactly one non-held call with a known microphone state. `--window` is deliberately
+`teams mic mute`, `teams mic unmute`, `teams camera on`, and `teams camera off`
+request a specific state. When that state is already present, they succeed
+without pressing anything, even if the button is disabled. This no-op confirms
+the existing Teams-reported state. All four commands require exactly one non-held call
+with a known state for the requested control. `--window` is deliberately
 limited to status reads because its indices can reorder between invocations.
 
 Before a change, the command rereads Teams, pins the current process generation
-and exact window/microphone/hang-up objects, checks that the microphone is enabled
+and exact window/media-button/hang-up objects, checks that the chosen control is enabled
 and supports `AXPress`, then rechecks the live label and focus. It dispatches at
 most one press and requires two consecutive observations of the desired state.
-It never repeats an uncertain press or restores the old microphone state as an
+For camera changes, those observations must also show that the camera button is
+enabled and supports pressing again: a temporarily disabled button during startup
+is allowed to settle within the verification budget, without another press.
+It never repeats an uncertain press or restores the old media state as an
 automatic recovery action.
 
 Action commands temporarily enable Teams' `AXEnhancedUserInterface` attribute
@@ -101,20 +108,23 @@ before dispatch, or an unverified result afterward. Nothing attempts to restore
 focus. Notifications are best effort: the monitor detects reported changes but
 cannot guarantee that a Teams version will never shift focus during a press.
 
-JSON retains the existing microphone status fields and adds:
+JSON retains the corresponding `microphone` or `camera` status fields and adds:
 
 | Field | Meaning |
 | --- | --- |
-| `action` | `mute` or `unmute` |
+| `action` | `mute`, `unmute`, `on`, or `off` |
 | `success` | Requested state confirmed with focus preserved |
 | `action_attempted` | An `AXPress` was dispatched or may have been dispatched |
 | `changed` | `false` for a no-op/refusal, `true` after verified change, `null` when an attempted action's outcome is uncertain |
 
-Commands take a per-user process lock so concurrent CLI invocations cannot both
-act on the same old state. A second invocation returns `command_in_progress`
+Microphone and camera commands share a per-user process lock so concurrent CLI
+invocations cannot overlap actions or accessibility setup/cleanup.
+A second invocation returns `command_in_progress`
 without waiting or pressing. The lock file stays in `/tmp`; the OS releases the
 lock when the process exits. Action sampling has an eight-second shared budget
-with at most eight verification observations; in-flight AX calls add overhead.
+with at most eight verification observations for microphone changes and twenty
+for camera changes; observations are spaced by 150 ms waits, and in-flight AX
+calls add overhead.
 
 Teams exposes a toggle rather than an atomic set-state API. Fresh reads and the
 process lock narrow races, but another controller or user can still change Teams
@@ -187,8 +197,8 @@ observations from a partial scan, not definitive overall status.
 - Traversal has a 12,000-node cap, depth limit, shared eight-second scan budget,
   and short per-message timeouts. In-flight Accessibility requests and setup
   add some overhead; this is not a hard real-time deadline.
-- Status commands perform no call actions. Mute/unmute use only the exact
-  microphone button's `AXPress` action. There is no activation, window raising,
+- Status commands perform no call actions. Media changes use only the exact
+  microphone or camera button's `AXPress` action. There is no activation, window raising,
   key/mouse event injection, network request, or logging of chat/meeting text.
 - Uses observed Teams UI identifiers, not a supported Microsoft control API;
   future Teams updates may require changes. The older third-party integration
@@ -200,7 +210,7 @@ observations from a partial scan, not definitive overall status.
 swift test
 ```
 
-The 58 tests cover label inversion, language/shortcut handling, pre-join and
+The 74 automated tests cover label inversion, language/shortcut handling, pre-join and
 participant exclusions, conflicting/duplicate controls, multiple call windows,
 unknown labels, incomplete reads, and held-call exclusion (including all-held
 and explicitly selected held windows). Camera tests additionally check that
@@ -208,6 +218,8 @@ microphone state does not influence camera status.
 Controller tests cover both desired states, no-ops, state and target races,
 disabled controls, focus refusal/loss, uncertain errors, stable confirmation,
 pre-dispatch rejection, and the no-retry rule.
+Camera-controller tests also exercise delayed startup and temporarily disabled
+controls without repeating the press or confirming success prematurely.
 
 Live validation on 2026-10-05: macOS 27.0.1, Apple Silicon, Teams
 26213.1006.5011.1671. The release executable read two call windows with different
@@ -258,3 +270,10 @@ not every Teams configuration. Because both the call and accessibility setup
 changed between trials, the test does not isolate the cause of the earlier
 no-effect press. There was one active call and no held call in the successful
 action run; held-call filtering has the earlier read-only and automated evidence.
+
+Camera on/off commands build successfully, and all 74 tests pass (including 16
+camera-controller tests). Release CLI checks also passed for six help forms and
+nine invalid operation/option combinations. The rebuilt executable read camera
+`on` and microphone `muted`, with `focus_unchanged: true` for both status commands.
+The user subsequently tested camera on/off manually and confirmed that everything
+works. No automated live camera cycle was run.
