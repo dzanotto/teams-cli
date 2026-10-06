@@ -12,8 +12,8 @@ This dependency-free Swift package targets macOS 13+ and requires Swift 6+.
 
 Run from the repository root:
 - `swift build`: build the debug executable.
-- `swift build -c release`: build `.build/release/teams`.
-- `swift run teams --help`: build and inspect CLI usage without changing Teams state.
+- `swift build -c release`: build `.build/release/teams-cli`.
+- `swift run teams-cli --help`: build and inspect CLI usage without changing Teams state.
 - `swift test`: run all automated tests.
 - `swift test --filter HandControllerTests`: run a focused XCTest suite.
 

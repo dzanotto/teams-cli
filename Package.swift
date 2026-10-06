@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "teams-cli",
     platforms: [.macOS(.v13)],
-    products: [.executable(name: "teams", targets: ["TeamsCLI"])],
+    products: [.executable(name: "teams-cli", targets: ["TeamsCLI"])],
     targets: [
         .target(name: "TeamsCore"),
         .executableTarget(name: "TeamsCLI", dependencies: ["TeamsCore"]),

@@ -12,19 +12,23 @@ third-party dependencies. From the repository root:
 
 ```sh
 swift build -c release
-.build/release/teams --help
+.build/release/teams-cli --help
 ```
 
-The executable is written to `.build/release/teams`. Use that path in place of
-`teams` in the command reference below, or invoke it by absolute path from another
+The executable is written to `.build/release/teams-cli`. Use that path in place of
+`teams-cli` in the command reference below, or invoke it by absolute path from another
 directory.
+
+The executable was renamed from `teams` to `teams-cli`; no compatibility alias is
+provided. Update existing scripts and integrations to use `.build/release/teams-cli`
+or its absolute path.
 
 ## Accessibility permission
 
 The terminal or launcher running the CLI must have macOS Accessibility access.
 In **System Settings → Privacy & Security → Accessibility**, enable your terminal
 app or launcher. If macOS attributes the request to the executable instead, add
-the absolute path to `teams` using the `+` control.
+the absolute path to `teams-cli` using the `+` control.
 
 The CLI checks permission without prompting or opening System Settings. Rebuilding
 or moving a directly authorized executable, or changing its launcher, may require
@@ -38,27 +42,27 @@ All commands support `--json`. Only status commands support `--window N`.
 
 | Command | Behavior |
 | --- | --- |
-| `teams mic status` | Read microphone state: `muted` or `unmuted` |
-| `teams mic mute` | Mute the microphone |
-| `teams mic unmute` | Unmute the microphone |
-| `teams mic toggle` | Request the opposite microphone state |
-| `teams camera status` | Read camera state: `on` or `off` |
-| `teams camera on` | Turn the camera on |
-| `teams camera off` | Turn the camera off |
-| `teams camera toggle` | Request the opposite camera state |
-| `teams hand status` | Read your own hand state: `raised` or `lowered` |
-| `teams hand raise` | Raise your own hand, or succeed without pressing if already raised |
-| `teams hand lower` | Lower your own hand, or succeed without pressing if already lowered |
-| `teams hand toggle` | Request the opposite state for your own hand |
-| `teams call end` | Leave your active call; report `ended` after verification |
+| `teams-cli mic status` | Read microphone state: `muted` or `unmuted` |
+| `teams-cli mic mute` | Mute the microphone |
+| `teams-cli mic unmute` | Unmute the microphone |
+| `teams-cli mic toggle` | Request the opposite microphone state |
+| `teams-cli camera status` | Read camera state: `on` or `off` |
+| `teams-cli camera on` | Turn the camera on |
+| `teams-cli camera off` | Turn the camera off |
+| `teams-cli camera toggle` | Request the opposite camera state |
+| `teams-cli hand status` | Read your own hand state: `raised` or `lowered` |
+| `teams-cli hand raise` | Raise your own hand, or succeed without pressing if already raised |
+| `teams-cli hand lower` | Lower your own hand, or succeed without pressing if already lowered |
+| `teams-cli hand toggle` | Request the opposite state for your own hand |
+| `teams-cli call end` | Leave your active call; report `ended` after verification |
 
 `--help` and `-h` work on their own, after a command group, or after a complete
-command, for example `teams hand --help` or `teams hand status --help`.
+command, for example `teams-cli hand --help` or `teams-cli hand status --help`.
 
 ```sh
-.build/release/teams mic status --json
-.build/release/teams camera off
-.build/release/teams hand toggle --json
+.build/release/teams-cli mic status --json
+.build/release/teams-cli camera off
+.build/release/teams-cli hand toggle --json
 ```
 
 ## Selecting a call window
@@ -72,8 +76,8 @@ Multiple remaining call windows produce `ambiguous`; the CLI never silently
 chooses the first. For status reads, use an index from the JSON output:
 
 ```sh
-.build/release/teams mic status --json
-.build/release/teams mic status --json --window 1
+.build/release/teams-cli mic status --json
+.build/release/teams-cli mic status --json --window 1
 ```
 
 Indices are 1-based positions in Teams' current Accessibility window list. They
@@ -120,7 +124,7 @@ prove a meeting's identity.
 
 ### Leaving a call
 
-`teams call end` leaves your participation using the Leave button. It does not
+`teams-cli call end` leaves your participation using the Leave button. It does not
 choose "End meeting for all", resume held calls, or dismiss confirmation dialogs.
 It requires one recognized, enabled Leave control in one non-held call.
 

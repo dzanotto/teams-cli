@@ -2,13 +2,13 @@ import Foundation
 import TeamsCore
 
 private let usage = """
-Usage: teams mic status [--json] [--window N]
-       teams mic <mute|unmute|toggle> [--json]
-       teams camera status [--json] [--window N]
-       teams camera <on|off|toggle> [--json]
-       teams hand status [--json] [--window N]
-       teams hand <raise|lower|toggle> [--json]
-       teams call end [--json]
+Usage: teams-cli mic status [--json] [--window N]
+       teams-cli mic <mute|unmute|toggle> [--json]
+       teams-cli camera status [--json] [--window N]
+       teams-cli camera <on|off|toggle> [--json]
+       teams-cli hand status [--json] [--window N]
+       teams-cli hand <raise|lower|toggle> [--json]
+       teams-cli call end [--json]
 
 Status output: mic = muted/unmuted; camera = on/off; hand = raised/lowered.
 Call end reports ended after verified closure of the selected call window.
