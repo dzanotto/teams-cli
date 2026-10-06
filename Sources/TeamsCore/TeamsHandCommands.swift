@@ -1,8 +1,19 @@
 /// Serializes cooperating action commands and changes your own hand state.
 public enum TeamsHandCommands {
     public static func set(_ target: HandTarget) throws -> HandActionResult {
+        try perform { try $0.set(target) }
+    }
+
+    /// Inverts the first confirmed hand state within the shared command lock.
+    public static func toggle() throws -> HandActionResult {
+        try perform { try $0.toggle() }
+    }
+
+    private static func perform(
+        _ operation: (HandController) throws -> HandActionResult
+    ) throws -> HandActionResult {
         try TeamsMediaCommandSupport.perform({ focus in
-            try HandController(backend: AccessibilityHandBackend(focus: focus)).set(target)
+            try operation(HandController(backend: AccessibilityHandBackend(focus: focus)))
         }, onFinalizationFailure: { result, reason, focus in
             HandActionResult(state: .unknown, reason: reason,
                              changed: result.actionAttempted ? nil : false,

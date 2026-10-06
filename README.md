@@ -1,7 +1,7 @@
 # Teams CLI for macOS
 
 Reads microphone mute, camera on/off, and your raised-hand state in the Microsoft Teams desktop app
-and provides microphone mute/unmute/toggle, camera on/off/toggle, hand raise/lower,
+and provides microphone mute/unmute/toggle, camera on/off/toggle, hand raise/lower/toggle,
 and call-end commands.
 It does not explicitly activate Teams, raise windows, send keyboard shortcuts,
 or restore focus. Media commands enforce focus checks; leaving a call allows
@@ -39,6 +39,7 @@ All commands support `--json`. Only status commands support `--window N`.
 | `teams hand status` | Read your own hand state: `raised` or `lowered` |
 | `teams hand raise` | Raise your own hand, or succeed without pressing if already raised |
 | `teams hand lower` | Lower your own hand, or succeed without pressing if already lowered |
+| `teams hand toggle` | Request the opposite state for your own hand |
 | `teams call end` | Leave your active call; report `ended` after verification |
 
 `teams --help`, `teams hand --help`, and `teams hand status --help` all show the
@@ -135,14 +136,17 @@ does not open a menu to find it. Status reads do not change accessibility settin
 own hand. They require one non-held call, a recognized hand state, and preserved
 focus. Repeating a command succeeds without pressing again when the state already
 matches. They use the same action checks and verification described below.
+`teams hand toggle` requests the opposite of the first confirmed own-hand state:
+lowered becomes raised, and raised becomes lowered.
 
 ```sh
 .build/release/teams hand raise
 .build/release/teams hand lower --json
+.build/release/teams hand toggle --json
 ```
 
 Successful text output is `raised` or `lowered`. JSON uses the `hand` state key
-and an `action` of `raise` or `lower`. Neither action supports `--window`.
+and an `action` of `raise`, `lower`, or `toggle`. These actions do not support `--window`.
 
 ## Microphone, camera, and hand controls
 
@@ -152,10 +156,11 @@ request a specific state. When that state is already present, they succeed
 without pressing anything, even if the button is disabled. This no-op confirms
 the existing Teams-reported state.
 
-`teams mic toggle` and `teams camera toggle` request the opposite of the first
-confirmed state for the chosen control: muted becomes unmuted and vice versa;
-camera on becomes off and vice versa. The read and change run under
-the same process lock and checks as the explicit state commands. The desired
+`teams mic toggle`, `teams camera toggle`, and `teams hand toggle` request the
+opposite of the first confirmed state for the chosen control: muted becomes
+unmuted and vice versa; camera on becomes off and vice versa; hand raised becomes
+lowered and vice versa. The read and change run under the same process lock and
+checks as the explicit state commands. The desired
 state stays fixed through rechecks: if someone else reaches it before the command's pre-press read,
 the command succeeds without pressing (`changed: false`, `action_attempted: false`).
 A later state change detected at dispatch is refused. Each new invocation reads
@@ -348,7 +353,7 @@ observations from a partial scan, not definitive overall status.
 swift test
 ```
 
-The 195 automated tests cover label inversion, language/shortcut handling, pre-join and
+The 207 automated tests cover label inversion, language/shortcut handling, pre-join and
 participant exclusions, conflicting/duplicate controls, multiple call windows,
 unknown labels, incomplete reads, and held-call exclusion (including all-held
 and explicitly selected held windows). Camera tests additionally check that
@@ -381,6 +386,10 @@ four-read toggles, single-use preflight, invalidation on failed/incomplete reads
 held/ambiguous calls, process/window/button/hang-up replacement, window reordering,
 fresh media state and hand-tile reads, disabled controls, focus refusal, deadlines,
 and fresh post-press verification.
+
+Hand toggle validation: all 207 automated tests pass, including 12 new toggle
+tests. The release build, 36 help checks, and 20 invalid-argument checks pass.
+No live hand-toggle actions were run for this change.
 
 Live discovery-consolidation validation on 2026-10-06: alternating two-toggle
 pairs between the readiness-polling release and the discovery-consolidation

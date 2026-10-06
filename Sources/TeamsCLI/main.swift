@@ -7,7 +7,7 @@ Usage: teams mic status [--json] [--window N]
        teams camera status [--json] [--window N]
        teams camera <on|off|toggle> [--json]
        teams hand status [--json] [--window N]
-       teams hand <raise|lower> [--json]
+       teams hand <raise|lower|toggle> [--json]
        teams call end [--json]
 
 Status output: mic = muted/unmuted; camera = on/off; hand = raised/lowered.
@@ -45,7 +45,7 @@ private struct Options {
         switch (media, operation) {
         case (.mic, .status), (.camera, .status), (.hand, .status), (.mic, .toggle), (.camera, .toggle),
              (.mic, .mute), (.mic, .unmute), (.camera, .on), (.camera, .off), (.call, .end),
-             (.hand, .raise), (.hand, .lower): break
+             (.hand, .raise), (.hand, .lower), (.hand, .toggle): break
         default: throw UsageError.invalid
         }
         self.media = media
@@ -187,7 +187,8 @@ do {
                             action: options.operation.rawValue, changed: result.changed,
                             actionAttempted: result.actionAttempted, success: result.success)
         case .hand:
-            let result = try TeamsHandCommands.set(options.operation == .raise ? .raised : .lowered)
+            let result = try options.operation == .toggle ? TeamsHandCommands.toggle() :
+                TeamsHandCommands.set(options.operation == .raise ? .raised : .lowered)
             output = Output(media: .hand, state: result.state.rawValue, reason: result.reason,
                             windows: result.windows.map { WindowOutput(window: $0.window, state: $0.state.rawValue) },
                             focusUnchanged: result.focusUnchanged, excludedWindows: result.excludedWindows,

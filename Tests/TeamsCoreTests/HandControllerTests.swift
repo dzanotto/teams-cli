@@ -2,6 +2,188 @@ import XCTest
 @testable import TeamsCore
 
 final class HandControllerTests: XCTestCase {
+    func testToggleBothDirectionsUsesOwnVideoDespiteStaleButtonDescription() throws {
+        for initial in [HandState.lowered, .raised] {
+            let target: HandState = initial == .lowered ? .raised : .lowered
+            let backend = FakeHandBackend([
+                classified([call(1, initial)]), classified([call(1, initial)]),
+                classified([call(1, target)]), classified([call(1, target)]),
+            ])
+            let result = try HandController(backend: backend).toggle()
+            XCTAssertTrue(result.success)
+            XCTAssertEqual(result.state, target)
+            XCTAssertEqual(result.changed, true)
+            XCTAssertTrue(result.actionAttempted)
+            XCTAssertEqual(result.focusUnchanged, true)
+            XCTAssertNil(result.reason)
+            XCTAssertEqual(backend.presses.count, 1)
+            XCTAssertEqual(backend.presses.first?.targetID, "call-a")
+            XCTAssertEqual(backend.presses.first?.expectedState, initial)
+            XCTAssertEqual(backend.sampleCount, 4)
+            XCTAssertEqual(backend.waitCount, 2)
+        }
+    }
+
+    func testRepeatedToggleReadsCurrentStateEachTime() throws {
+        let backend = FakeHandBackend([
+            observed(.lowered), observed(.lowered), observed(.raised), observed(.raised),
+            observed(.raised), observed(.raised), observed(.lowered), observed(.lowered),
+        ])
+        let controller = HandController(backend: backend)
+        let first = try controller.toggle()
+        let second = try controller.toggle()
+        XCTAssertTrue(first.success)
+        XCTAssertTrue(second.success)
+        XCTAssertEqual(first.state, .raised)
+        XCTAssertEqual(second.state, .lowered)
+        XCTAssertEqual(backend.presses.map(\.expectedState), [.lowered, .raised])
+        XCTAssertEqual(backend.sampleCount, 8)
+    }
+
+    func testToggleKeepsDesiredStateWhenAnotherActorReachesItBeforePress() throws {
+        for initial in [HandState.lowered, .raised] {
+            let target: HandState = initial == .lowered ? .raised : .lowered
+            let backend = FakeHandBackend([observed(initial), observed(target, canPress: false)])
+            let result = try HandController(backend: backend).toggle()
+            XCTAssertTrue(result.success)
+            XCTAssertEqual(result.state, target)
+            XCTAssertEqual(result.changed, false)
+            XCTAssertFalse(result.actionAttempted)
+            XCTAssertTrue(backend.presses.isEmpty)
+        }
+    }
+
+    func testToggleRefusesUnavailableStatesInitiallyAndBeforePress() throws {
+        let cases: [(HandObservation, String)] = [
+            (classified([]), "no_call_controls"),
+            (classified([call(1, .lowered), call(2, .lowered)]), "multiple_call_windows"),
+            (classified([call(1, .lowered, held: true)]), "all_calls_on_hold"),
+            (classified([call(1, .lowered)], complete: false), "inspection_incomplete"),
+            (classified([call(1, .unknown)]), "unrecognized_own_video_label"),
+            (observed(.unknown), "hand_state_unavailable"),
+            (observed(.ambiguous), "hand_state_unavailable"),
+        ]
+        for (invalid, reason) in cases {
+            for observations in [[invalid], [observed(.lowered), invalid]] {
+                let backend = FakeHandBackend(observations)
+                assertNotAttempted(try HandController(backend: backend).toggle(), reason: reason)
+                XCTAssertTrue(backend.presses.isEmpty, reason)
+            }
+        }
+    }
+
+    func testToggleExcludesHeldCallsAndKeepsTargetAcrossWindowReordering() throws {
+        let backend = FakeHandBackend([
+            classified([call(1, .raised, held: true), call(2, .lowered)]),
+            classified([call(1, .raised, held: true), call(3, .lowered)]),
+            classified([call(1, .raised, held: true), call(3, .raised)]),
+            classified([call(1, .raised, held: true), call(3, .raised)]),
+        ])
+        let result = try HandController(backend: backend).toggle()
+        XCTAssertTrue(result.success)
+        XCTAssertEqual(result.windows, [WindowHandStatus(window: 3, state: .raised)])
+        XCTAssertEqual(result.excludedWindows, [ExcludedWindow(window: 1, reason: "on_hold")])
+        XCTAssertEqual(backend.presses.count, 1)
+    }
+
+    func testToggleRefusesMissingIdentityAndDisabledControls() throws {
+        for observations in [
+            [observed(.lowered, id: nil)],
+            [observed(.lowered, canPress: false)],
+            [observed(.lowered), observed(.lowered, canPress: false)],
+        ] {
+            let backend = FakeHandBackend(observations)
+            assertNotAttempted(try HandController(backend: backend).toggle(), reason: "control_unavailable")
+            XCTAssertTrue(backend.presses.isEmpty)
+        }
+    }
+
+    func testToggleRejectsReplacementCallsBeforeAndAfterPress() throws {
+        let before = FakeHandBackend([observed(.lowered), observed(.raised, id: "call-b")])
+        assertNotAttempted(try HandController(backend: before).toggle(), reason: "target_changed")
+        XCTAssertTrue(before.presses.isEmpty)
+        let after = FakeHandBackend([observed(.lowered), observed(.lowered), observed(.raised, id: "call-b")])
+        assertUncertain(try HandController(backend: after).toggle(), reason: "target_changed")
+        XCTAssertEqual(after.presses.count, 1)
+    }
+
+    func testToggleRequiresPreservedFocusBeforeAndAfterPress() throws {
+        let failures: [(Bool?, String)] = [(false, "focus_changed"), (nil, "focus_unavailable")]
+        for (focus, reason) in failures {
+            for values in [[focus], [true, focus]] {
+                let backend = FakeHandBackend([observed(.lowered)], focusValues: values)
+                assertNotAttempted(try HandController(backend: backend).toggle(), reason: reason)
+                XCTAssertTrue(backend.presses.isEmpty)
+            }
+            for values in [[true, true, focus], [true, true, true, focus]] {
+                let backend = FakeHandBackend([
+                    observed(.lowered), observed(.lowered), observed(.raised), observed(.raised),
+                ], focusValues: values)
+                assertUncertain(try HandController(backend: backend).toggle(), reason: reason)
+                XCTAssertEqual(backend.presses.count, 1)
+            }
+        }
+    }
+
+    func testToggleRequiresConsecutiveCompleteMatchesWithoutAnotherPress() throws {
+        for interrupted in [observed(.lowered), classified([call(1, .raised)], complete: false)] {
+            let backend = FakeHandBackend([
+                observed(.lowered), observed(.lowered), observed(.raised), interrupted,
+                observed(.raised), observed(.raised),
+            ])
+            let result = try HandController(backend: backend).toggle()
+            XCTAssertTrue(result.success)
+            XCTAssertEqual(result.state, .raised)
+            XCTAssertEqual(backend.waitCount, 4)
+            XCTAssertEqual(backend.presses.count, 1)
+        }
+    }
+
+    func testToggleTimeoutAndIncompleteVerificationNeverRetry() throws {
+        let cases: [([HandObservation], String)] = [
+            ([observed(.lowered)], "verification_timeout"),
+            (Array(repeating: observed(.lowered), count: 9) + [observed(.raised)], "verification_timeout"),
+            ([observed(.lowered), observed(.lowered), classified([call(1, .raised)], complete: false)],
+             "inspection_incomplete"),
+        ]
+        for (observations, reason) in cases {
+            let backend = FakeHandBackend(observations)
+            assertUncertain(try HandController(backend: backend).toggle(), reason: reason)
+            XCTAssertEqual(backend.presses.count, 1)
+            XCTAssertEqual(backend.waitCount, 8)
+        }
+    }
+
+    func testToggleReadAndPressFailuresNeverRetry() throws {
+        for index in [0, 1, 2] {
+            let backend = FakeHandBackend([observed(.lowered)])
+            backend.sampleErrorAt = index
+            if index < 2 {
+                XCTAssertThrowsError(try HandController(backend: backend).toggle())
+                XCTAssertTrue(backend.presses.isEmpty)
+            } else {
+                assertUncertain(try HandController(backend: backend).toggle(), reason: "action_outcome_unknown")
+                XCTAssertEqual(backend.presses.count, 1)
+            }
+        }
+        let pressError = FakeHandBackend([observed(.lowered)])
+        pressError.throwOnPress = true
+        assertUncertain(try HandController(backend: pressError).toggle(), reason: "action_outcome_unknown")
+        XCTAssertEqual(pressError.presses.count, 1)
+        XCTAssertEqual(pressError.waitCount, 0)
+    }
+
+    func testToggleLastMomentRejectionsDoNotRetry() throws {
+        for reason in ["hand_state_changed", "target_changed", "preflight_failed", "control_unavailable",
+                       "focus_changed", "focus_unavailable"] {
+            let backend = FakeHandBackend([observed(.lowered)])
+            backend.rejectionReason = reason
+            assertNotAttempted(try HandController(backend: backend).toggle(), reason: reason)
+            XCTAssertEqual(backend.presses.count, 1)
+            XCTAssertEqual(backend.waitCount, 0)
+        }
+    }
+
     func testRaiseAndLowerPressOnceAndConfirmTwoSamples() throws {
         for target in [HandTarget.raised, .lowered] {
             let initial: HandState = target == .raised ? .lowered : .raised
