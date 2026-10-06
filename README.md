@@ -1,5 +1,11 @@
 # Teams CLI for macOS
 
+> [!IMPORTANT]
+> **UNOFFICIAL PROJECT — NOT AFFILIATED WITH MICROSOFT.**
+> This is an independent project. It is not developed, endorsed, sponsored, or
+> supported by Microsoft. It is not a Microsoft product or an official Microsoft
+> Teams integration.
+
 Read and control your microphone, camera, and raised hand in the Microsoft Teams
 desktop app, or leave your active call. The CLI uses macOS Accessibility and
 reports Teams' UI state; it does not measure audio/video capture or delivery to
