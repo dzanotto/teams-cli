@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-tag:
+    name: Validate version tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a stable version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo 'Expected a stable version tag such as v0.1.0.' >&2
+            exit 1
+          fi
+
+  build:
+    name: Validate and package
+    needs: validate-tag
+    uses: ./.github/workflows/ci.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      EXPECTED_COMMIT: ${{ github.sha }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download both archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: teams-cli-macos-*
+          merge-multiple: true
+          path: dist
+      - name: Generate and verify checksums
+        working-directory: dist
+        shell: bash
+        run: |
+          sha256sum \
+            "teams-cli-${RELEASE_TAG}-macos-arm64.tar.gz" \
+            "teams-cli-${RELEASE_TAG}-macos-x86_64.tar.gz" > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Create draft with assets, then publish
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          existing_tags=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[].tag_name')
+          while IFS= read -r existing_tag; do
+            if [[ "$existing_tag" == "$RELEASE_TAG" ]]; then
+              echo 'A release or draft already exists for this tag; refusing to replace it.' >&2
+              exit 1
+            fi
+          done <<< "$existing_tags"
+          remote_commit=$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq .sha)
+          if [[ "$remote_commit" != "$EXPECTED_COMMIT" ]]; then
+            echo 'The release tag no longer points to the tested commit.' >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" \
+            "teams-cli-${RELEASE_TAG}-macos-arm64.tar.gz" \
+            "teams-cli-${RELEASE_TAG}-macos-x86_64.tar.gz" \
+            SHA256SUMS \
+            --verify-tag --draft --title "$RELEASE_TAG" --generate-notes
+          gh release edit "$RELEASE_TAG" --draft=false

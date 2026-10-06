@@ -11,6 +11,23 @@ desktop app, or leave your active call. The CLI uses macOS Accessibility and
 reports Teams' UI state; it does not measure audio/video capture or delivery to
 other participants.
 
+## Download a release
+
+Download an archive and `SHA256SUMS` from
+[GitHub Releases](https://github.com/dzanotto/teams-cli/releases):
+
+- `teams-cli-vX.Y.Z-macos-arm64.tar.gz` for Apple Silicon.
+- `teams-cli-vX.Y.Z-macos-x86_64.tar.gz` for Intel.
+
+In the download directory, run `shasum -a 256 --check --ignore-missing SHA256SUMS`
+and confirm your archive is reported as `OK`. Extract the archive and run
+`./teams-cli --help` from the extracted directory, or move `teams-cli` to a
+directory on your `PATH`. The archives require macOS 13+; Swift is only needed
+when building from source. `BUILD-INFO.txt` identifies the version and source commit.
+
+Release binaries are not Developer ID signed or notarized. Accessibility access
+is still required as described below.
+
 ## Build and run
 
 Requires macOS 13+ and Swift 6+ (Xcode or Command Line Tools). There are no
@@ -227,3 +244,15 @@ tests do not establish compatibility with every Teams version. See
 [validation notes](docs/validation.md) for historical live checks, known gaps, and
 performance measurements, and [Repository Guidelines](AGENTS.md) for contribution
 conventions.
+
+## CI and releases
+
+GitHub Actions runs the automated tests, a release build, CLI help, and an archive
+smoke check on pull requests and pushes to `main`, using native Apple Silicon and
+Intel macOS runners with Xcode 16.4. This does not validate live Teams behavior or
+runtime compatibility with every supported macOS version.
+
+Pushing a stable version tag such as `v0.1.0` runs the same checks on the tagged
+commit and publishes both archives, `SHA256SUMS`, and generated release notes to
+GitHub Releases. See [the release procedure](docs/releases.md) for exact commands
+and recovery instructions.
