@@ -31,21 +31,7 @@ trap 'rm -rf "$staging_dir"' EXIT
 package_dir="$staging_dir/$package_name"
 mkdir -p "$package_dir" "$repo_root/.build/release-assets"
 install -m 755 "$binary" "$package_dir/teams-cli"
-cp README.md LICENSE AGENTS.md "$package_dir/"
-cp -R docs "$package_dir/docs"
-
-{
-    printf 'version=%s\n' "${release_tag#v}"
-    printf 'tag=%s\n' "$release_tag"
-    printf 'commit=%s\n' "$(git rev-parse HEAD)"
-    printf 'architecture=%s\n' "$release_arch"
-    if [[ -n "$(git status --porcelain)" ]]; then
-        printf 'working_tree=dirty\n'
-    else
-        printf 'working_tree=clean\n'
-    fi
-    swift --version 2>&1
-} > "$package_dir/BUILD-INFO.txt"
+cp LICENSE "$package_dir/"
 
 archive="$repo_root/.build/release-assets/$package_name.tar.gz"
 COPYFILE_DISABLE=1 tar -czf "$archive" -C "$staging_dir" "$package_name"

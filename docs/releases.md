@@ -49,9 +49,8 @@ teams-cli-v0.1.0-macos-x86_64.tar.gz
 SHA256SUMS
 ```
 
-Each archive has one directory containing `teams-cli`, `README.md`, `LICENSE`,
-`AGENTS.md`, `docs/`, and `BUILD-INFO.txt`. Build information records the version,
-tag, source commit, architecture, working-tree status, and compiler version.
+Each archive has one versioned directory containing only `teams-cli` and `LICENSE`.
+Documentation stays in the repository; the release tag identifies the source commit.
 Archives are not Developer ID signed or notarized. Automated checks do not
 establish live Teams compatibility; any live action checks remain a separate,
 explicitly authorized activity.
@@ -95,5 +94,4 @@ bash scripts/package-release.sh v0.0.0 "$(uname -m)"
 
 The archive is written under ignored `.build/release-assets/`. CI uses `v0.0.0`
 for this smoke check on ordinary branch and pull-request runs; only release runs
-upload their versioned archives for publication. Local packaging records a dirty
-working tree in `BUILD-INFO.txt` when applicable.
+upload their versioned archives for publication.

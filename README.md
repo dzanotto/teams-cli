@@ -23,7 +23,9 @@ In the download directory, run `shasum -a 256 --check --ignore-missing SHA256SUM
 and confirm your archive is reported as `OK`. Extract the archive and run
 `./teams-cli --help` from the extracted directory, or move `teams-cli` to a
 directory on your `PATH`. The archives require macOS 13+; Swift is only needed
-when building from source. `BUILD-INFO.txt` identifies the version and source commit.
+when building from source. Each archive contains only `teams-cli` and `LICENSE`
+inside its versioned directory. Usage and installation documentation is available
+in this repository.
 
 Release binaries are not Developer ID signed or notarized. Accessibility access
 is still required as described below.
