@@ -38,8 +38,7 @@ final class TeamsAccessibilityExposure {
         // cleanup is required regardless of the setter's return code.
         needsRestore = true
         _ = AXUIElementSetAttributeValue(application, attributeName, kCFBooleanTrue)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
-        guard sameGeneration() == true, Self.read(application) == true else {
+        guard waitForValue(true) == .confirmed else {
             guard restore() else {
                 throw MicrophoneCommandError.accessibilityCleanupFailed
             }
@@ -78,15 +77,22 @@ final class TeamsAccessibilityExposure {
         _ = AXUIElementSetAttributeValue(
             application, attributeName, original ? kCFBooleanTrue : kCFBooleanFalse
         )
-        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
-        guard let sameAfterWrite = sameGeneration() else { return false }
-        guard sameAfterWrite else {
+        switch waitForValue(original) {
+        case .confirmed, .processGone:
             needsRestore = false
             return true
+        case .unavailable, .timedOut:
+            return false
         }
-        guard Self.read(application) == original else { return false }
-        needsRestore = false
-        return true
+    }
+
+    private func waitForValue(_ expected: Bool) -> AccessibilityExposureReadiness.Result {
+        // Later setup/cleanup reads retain the usual per-message timeout.
+        defer { AXUIElementSetMessagingTimeout(application, 0.25) }
+        return AccessibilityExposureReadiness(sameGeneration: sameGeneration, read: { timeout in
+            AXUIElementSetMessagingTimeout(self.application, Float(timeout))
+            return Self.read(self.application)
+        }).waitFor(expected)
     }
 
     private func sameGeneration() -> Bool? {

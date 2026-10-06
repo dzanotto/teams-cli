@@ -28,7 +28,7 @@ struct CameraObservation {
 
 protocol CameraBackend {
     func sample() throws -> CameraObservation
-    /// Recheck the target and expected state immediately before the single press.
+    /// Consume the latest sample, then recheck live state, process and focus before pressing.
     func press(targetID: String, expectedState: CameraState) throws
     func focusPreserved() -> Bool?
     func waitForUpdate()

@@ -30,7 +30,7 @@ struct HandObservation: MediaObservation {
 
 protocol HandBackend {
     func sample() throws -> HandObservation
-    /// Recheck the target and expected state immediately before the single press.
+    /// Consume the latest sample, then recheck live state, process and focus before pressing.
     func press(targetID: String, expectedState: HandState) throws
     func focusPreserved() -> Bool?
     func waitForUpdate()

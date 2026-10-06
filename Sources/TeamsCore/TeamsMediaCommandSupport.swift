@@ -111,17 +111,12 @@ private struct MediaTargetHandle {
     let hangup: AXUIElement
     var ownVideo: AXUIElement?
 
-    func matches(_ handles: CallWindowHandles, control: MediaControl) -> Bool {
+    func matches(_ handles: CallWindowHandles, generation: MediaProcessGeneration, control: MediaControl) -> Bool {
         let buttons = handles.buttons(for: control)
-        return handles.application.processIdentifier == pid && handles.application.launchDate == launched &&
+        return generation.pid == pid && generation.launched == launched &&
             buttons.count == 1 && handles.hangups.count == 1 &&
             CFEqual(window, handles.window) && CFEqual(button, buttons[0]) &&
             CFEqual(hangup, handles.hangups[0])
-    }
-
-    var processStillRunning: Bool {
-        guard let application = NSRunningApplication(processIdentifier: pid) else { return false }
-        return !application.isTerminated && application.launchDate == launched
     }
 }
 
@@ -143,58 +138,78 @@ enum MediaButtonSnapshot {
 
 /// AX mechanics shared by microphone, camera and hand; each supplies its own classifier.
 final class NativeMediaBackend<Assessment, State: Equatable> {
-    private let reader = TeamsAccessibilityReader()
+    private let accessibility: any MediaAccessibilityClient
     private let control: MediaControl
-    private let focus: FocusMonitor
+    private let checkFocus: () -> Bool?
     private let classify: ([WindowSnapshot], Bool) -> Assessment
     private let select: (Assessment) -> MediaSelection<State>?
     private let stateChangedReason: String
     private let deadline: TimeInterval
     private var target: MediaTargetHandle?
+    /// Only the latest successful sample can authorize one dispatch attempt.
+    /// Every new sample invalidates it before reading, including failed reads.
+    private var preflight: NativeMediaObservation<Assessment>?
 
-    init(control: MediaControl, focus: FocusMonitor,
-         stateChangedReason: String,
+    convenience init(control: MediaControl, focus: FocusMonitor,
+                     stateChangedReason: String,
+                     classify: @escaping ([WindowSnapshot], Bool) -> Assessment,
+                     select: @escaping (Assessment) -> MediaSelection<State>?) {
+        self.init(control: control, accessibility: SystemMediaAccessibilityClient(),
+                  checkFocus: focus.preserved, stateChangedReason: stateChangedReason,
+                  classify: classify, select: select)
+    }
+
+    init(control: MediaControl, accessibility: any MediaAccessibilityClient,
+         checkFocus: @escaping () -> Bool?, stateChangedReason: String,
          classify: @escaping ([WindowSnapshot], Bool) -> Assessment,
          select: @escaping (Assessment) -> MediaSelection<State>?) {
+        self.accessibility = accessibility
         self.control = control
-        self.focus = focus
+        self.checkFocus = checkFocus
         self.classify = classify
         self.select = select
         self.stateChangedReason = stateChangedReason
-        deadline = ProcessInfo.processInfo.systemUptime + 8
+        deadline = accessibility.uptime + 8
     }
 
     func sample() throws -> NativeMediaObservation<Assessment> {
-        let remaining = deadline - ProcessInfo.processInfo.systemUptime
+        preflight = nil
+        let remaining = deadline - accessibility.uptime
         guard remaining > 0 else { throw AccessibilityActionError.timedOut }
-        let snapshot = try reader.read(control: control, timeout: min(1.5, remaining))
+        let snapshot = try accessibility.read(control: control, timeout: min(1.5, remaining))
         let assessment = classify(snapshot.windows, snapshot.complete)
         guard let selected = select(assessment),
               let handles = snapshot.handles[selected.window],
               handles.buttons(for: control).count == 1, handles.hangups.count == 1,
               control != .hand || handles.ownVideos.count == 1,
-              let launched = handles.application.launchDate else {
+              let generation = accessibility.generation(of: handles.application) else {
             return NativeMediaObservation(assessment: assessment, targetID: nil, canPress: false)
         }
         let button = handles.buttons(for: control)[0]
-        if target?.matches(handles, control: control) != true {
-            target = MediaTargetHandle(id: UUID().uuidString, pid: handles.application.processIdentifier,
-                                       launched: launched, window: handles.window,
+        if target?.matches(handles, generation: generation, control: control) != true {
+            target = MediaTargetHandle(id: UUID().uuidString, pid: generation.pid,
+                                       launched: generation.launched, window: handles.window,
                                        button: button, hangup: handles.hangups[0])
         }
         // Self-video tiles can rerender independently of the call/control identity.
         // Retain the current scan's handle for a fresh state read immediately before pressing.
         target?.ownVideo = control == .hand ? handles.ownVideos.first : nil
         // A temporarily disabled camera retains its identity while Teams starts it.
-        return NativeMediaObservation(assessment: assessment, targetID: target?.id, canPress: canPress(button))
+        let observation = NativeMediaObservation(assessment: assessment, targetID: target?.id,
+                                                 canPress: accessibility.canPress(button))
+        preflight = observation
+        return observation
     }
 
     func press(targetID: String, expectedState: State) throws {
-        // Refresh selection, hold exclusions and identity immediately before dispatch.
-        let fresh: NativeMediaObservation<Assessment>
-        do { fresh = try sample() }
-        catch { throw MediaPressRejected(reason: "preflight_failed") }
-        guard fresh.targetID == targetID, let target, target.processStillRunning else {
+        // The controller has just rescanned eligibility, hold exclusions and identity.
+        // Consume that evidence once instead of repeating the full tree traversal.
+        // Direct state, process, readiness and focus checks below remain fresh.
+        let prepared = preflight
+        preflight = nil
+        guard let fresh = prepared else { throw MediaPressRejected(reason: "preflight_failed") }
+        guard fresh.targetID == targetID, let target,
+              accessibility.processMatches(pid: target.pid, launched: target.launched) else {
             throw MediaPressRejected(reason: "target_changed")
         }
         guard select(fresh.assessment)?.state == expectedState else {
@@ -202,46 +217,35 @@ final class NativeMediaBackend<Assessment, State: Equatable> {
         }
         guard fresh.canPress else { throw MediaPressRejected(reason: "control_unavailable") }
 
-        let button = MediaButtonSnapshot.read(control: control) { value(target.button, $0) }
-        // The full scan above established call eligibility. This synthetic hangup
+        let button = MediaButtonSnapshot.read(control: control) { accessibility.value(target.button, $0) }
+        // The consumed full scan established call eligibility. This synthetic hangup
         // permits the classifier to validate the freshly read button and state indicator.
         var controls = [
             button, ControlSnapshot(role: "AXButton", identifier: "hangup-button", label: "")
         ]
         if control == .hand, let ownVideo = target.ownVideo {
-            controls.append(OwnVideoHandIndicator.read { value(ownVideo, $0) })
+            controls.append(OwnVideoHandIndicator.read { accessibility.value(ownVideo, $0) })
         }
         let check = classify([WindowSnapshot(index: 1, controls: controls)], true)
         guard select(check)?.state == expectedState else {
             throw MediaPressRejected(reason: stateChangedReason)
         }
-        guard target.processStillRunning else { throw MediaPressRejected(reason: "target_changed") }
-        guard canPress(target.button) else { throw MediaPressRejected(reason: "control_unavailable") }
-        guard let preserved = focus.preserved() else { throw MediaPressRejected(reason: "focus_unavailable") }
+        guard accessibility.processMatches(pid: target.pid, launched: target.launched) else {
+            throw MediaPressRejected(reason: "target_changed")
+        }
+        guard accessibility.canPress(target.button) else { throw MediaPressRejected(reason: "control_unavailable") }
+        guard let preserved = checkFocus() else { throw MediaPressRejected(reason: "focus_unavailable") }
         guard preserved else { throw MediaPressRejected(reason: "focus_changed") }
-        guard ProcessInfo.processInfo.systemUptime < deadline else {
+        guard accessibility.uptime < deadline else {
             throw MediaPressRejected(reason: "preflight_failed")
         }
-        let error = AXUIElementPerformAction(target.button, kAXPressAction as CFString)
+        let error = accessibility.press(target.button)
         guard error == .success else { throw AccessibilityActionError.pressFailed(error.rawValue) }
     }
 
-    func focusPreserved() -> Bool? { focus.preserved() }
+    func focusPreserved() -> Bool? { checkFocus() }
 
     func waitForUpdate() {
         RunLoop.current.run(until: Date().addingTimeInterval(0.15))
-    }
-
-    private func canPress(_ element: AXUIElement) -> Bool {
-        guard value(element, kAXEnabledAttribute) as? Bool == true else { return false }
-        var actions: CFArray?
-        return AXUIElementCopyActionNames(element, &actions) == .success &&
-            (actions as? [String] ?? []).contains(kAXPressAction)
-    }
-
-    private func value(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
-        AXUIElementSetMessagingTimeout(element, 0.25)
-        var result: CFTypeRef?
-        return AXUIElementCopyAttributeValue(element, name as CFString, &result) == .success ? result : nil
     }
 }

@@ -28,7 +28,7 @@ struct MicrophoneObservation {
 
 protocol MicrophoneBackend {
     func sample() throws -> MicrophoneObservation
-    /// Recheck the target and expected state immediately before the single press.
+    /// Consume the latest sample, then recheck live state, process and focus before pressing.
     func press(targetID: String, expectedState: MicrophoneState) throws
     func focusPreserved() -> Bool?
     func waitForUpdate()

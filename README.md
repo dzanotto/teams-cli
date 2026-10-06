@@ -180,9 +180,24 @@ is allowed to settle within the verification budget, without another press.
 It never repeats an uncertain press or restores the old media state as an
 automatic recovery action.
 
+For microphone, camera, and hand changes that need a press, initial discovery
+and a full preflight read establish eligibility and pin the target. Dispatch
+consumes that latest preflight once, then directly rereads the control state,
+process generation, enabled/press capability, and focus without a third full
+discovery read. Starting another sample invalidates the earlier preflight,
+including when the new read fails or is inconclusive. Both post-press
+confirmations still use fresh full reads: a normal successful change uses four
+full UI reads instead of five. No discovery evidence is shared between commands.
+
 Action commands temporarily enable Teams' `AXEnhancedUserInterface` attribute
 when its known original value is false. They verify the readback and restore the
 original value on completion, only for the same Teams process generation.
+After each attribute write, they check its readback immediately and poll at
+25 ms intervals for up to 400 ms, returning as soon as the value is confirmed.
+Each read checks process identity before and after, and its AX message timeout
+is capped to the remaining polling budget. In-flight system calls can add overhead.
+Attribute readback does not establish that a media control is ready; the full
+control reads and pre-press checks still apply.
 Unavailable setup or unverified cleanup is reported as a failure. Status commands
 do not write this attribute. Cleanup finishes before the final focus check;
 deferred cleanup cannot issue later writes.
@@ -333,7 +348,7 @@ observations from a partial scan, not definitive overall status.
 swift test
 ```
 
-The 163 automated tests cover label inversion, language/shortcut handling, pre-join and
+The 195 automated tests cover label inversion, language/shortcut handling, pre-join and
 participant exclusions, conflicting/duplicate controls, multiple call windows,
 unknown labels, incomplete reads, and held-call exclusion (including all-held
 and explicitly selected held windows). Camera tests additionally check that
@@ -358,6 +373,69 @@ Hand-controller tests cover both directions, repeated requests, concurrent state
 changes, target identity, focus checks, refusal and uncertain outcomes, stable
 confirmation, fresh own-video reads before dispatch, and bounded recovery from
 incomplete verification scans without repeating a press.
+Accessibility-readiness tests use virtual time and scripted readback to cover
+immediate/delayed confirmation, transient missing values, timeouts, process
+replacement, unavailable process identity, and reads or waits exceeding the budget.
+Native-backend tests replace all external accessibility operations and verify
+four-read toggles, single-use preflight, invalidation on failed/incomplete reads,
+held/ambiguous calls, process/window/button/hang-up replacement, window reordering,
+fresh media state and hand-tile reads, disabled controls, focus refusal, deadlines,
+and fresh post-press verification.
+
+Live discovery-consolidation validation on 2026-10-06: alternating two-toggle
+pairs between the readiness-polling release and the discovery-consolidation
+candidate produced four measurements per binary. All eight toggles returned
+`success: true`, `changed: true`, and `focus_unchanged: true`; independent status
+reads confirmed the microphone started and finished unmuted. The candidate's
+median was 1.000 seconds (range 0.959–1.098), compared with 1.073 seconds
+(range 0.953–1.218) for the baseline in the same session. The observed median
+reduction was 73 ms (6.8%). Ranges overlap and there are only four runs per binary,
+so this is preliminary timing evidence. Median CLI CPU time fell from 89.4 to
+75.9 ms; this excludes Teams' CPU usage. These results measure command completion
+and Teams-reported UI state, not audio delivery. Camera and hand actions share
+the consolidated backend but were not tested live in this validation. All 195
+automated tests and the release build passed.
+
+Instrumented comparison on 2026-10-06: a temporary copy of the current release
+used the same buffered, monotonic timing spans as the initial profile. All six
+microphone toggles succeeded with `focus_unchanged: true`; independent status
+reads confirmed the microphone started and finished unmuted. The table compares
+arithmetic means from six instrumented toggles per version, in milliseconds.
+The initial and current runs occurred at different times, so UI and load
+differences remain possible; these are observed timings, not isolated causal
+estimates for each change.
+
+| Stage | Initial mean (ms) | Current mean (ms) |
+| --- | ---: | ---: |
+| Accessibility setup | 416.5 | 10.2 |
+| Accessibility cleanup | 402.6 | 1.0 |
+| Full UI reads | 738.0 | 631.0 |
+| Verification waits | 306.4 | 306.6 |
+| Focus monitoring | 28.0 | 28.5 |
+| Button-press dispatch | 0.09 | 0.12 |
+| Other, including startup and output | 52.5 | 38.3 |
+| **Total** | **1,944.2** | **1,015.7** |
+
+Every current run performed four full reads instead of five. Both accessibility
+readbacks matched on their first poll, with no polling sleeps in these runs.
+The initial profile averaged 4,960 visited nodes per command and the current
+profile averaged 4,008; average scan sizes were approximately 992 and 1,002 nodes.
+Current UI reads and verification waits account for approximately 92% of command
+time. "Other" includes trace serialization/output and process startup/exit;
+the instrumented current median was 1.003 seconds (range 0.854–1.140).
+The temporary profiling build did not change the normal release executable.
+
+Live readiness-polling validation on 2026-10-06: six release-candidate microphone
+toggles all returned `success: true`, `changed: true`, and `focus_unchanged: true`.
+Independent status reads before and after confirmed the microphone started and
+finished unmuted. Median command time was 1.641 seconds (range 1.598–1.672),
+compared with 1.955 seconds (range 1.853–2.059) in six earlier runs of the previous
+release. This is an observed reduction of 314 ms (16%); the runs were measured
+separately, so changes in Teams' UI and system load are not controlled for.
+The measurement includes process startup, output, verification, and cleanup;
+it measures Teams-reported state, not audio delivery. Camera, hand, and call-end
+actions share the updated accessibility lifecycle but were not tested live in
+this validation. All 176 automated tests and the release build passed.
 
 Live validation on 2026-10-05: macOS 27.0.1, Apple Silicon, Teams
 26213.1006.5011.1671. The release executable read two call windows with different

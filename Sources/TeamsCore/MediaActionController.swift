@@ -67,7 +67,8 @@ struct MediaActionController<Observation: MediaObservation> {
             return result(state: target, reason: nil, success: true)
         }
 
-        // Re-read before dispatch: a replacement call must never inherit an action.
+        // This full scan also prepares the native backend's single-use dispatch
+        // evidence. A replacement call must never inherit an action.
         observation = try sample()
         focus = focusPreserved()
         if let reason = selectionFailure(observation) {
