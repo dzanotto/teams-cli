@@ -7,115 +7,90 @@ import ApplicationServices
 /// that macOS or an application reported every brief focus change.
 final class FocusMonitor {
     private let state: FocusMonitorState
-    private let runLoop: CFRunLoop
-    private let notificationCenter: NotificationCenter
-    private var activationObserver: NSObjectProtocol?
-    private var windowObserver: AXObserver?
-    private var observedApplication: AXUIElement?
+    private let environment: FocusMonitoringEnvironment
+    private var activationObserver: FocusObservation?
+    private var windowObserver: FocusObservation?
     private var stopped = false
 
-    init() {
-        state = FocusMonitorState(baseline: MonitoredFocus.capture())
-        runLoop = CFRunLoopGetCurrent()
-        notificationCenter = NSWorkspace.shared.notificationCenter
+    convenience init() {
+        self.init(environment: .live)
+    }
+
+    init(environment: FocusMonitoringEnvironment) {
+        self.environment = environment
+        state = FocusMonitorState(baseline: environment.capture())
 
         let state = self.state
-        activationObserver = notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification,
-            object: nil,
-            queue: nil
-        ) { [weak state] notification in
-            let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            state?.observeActivation(pid: application?.processIdentifier)
+        activationObserver = environment.observeActivation { [weak state] pid in
+            state?.observeActivation(pid: pid)
         }
 
         if let pid = state.baseline.pid, state.baseline.window != nil {
-            let application = AXUIElementCreateApplication(pid)
-            AXUIElementSetMessagingTimeout(application, 0.25)
-            var observer: AXObserver?
-            let created = AXObserverCreate(pid, { _, element, _, context in
-                guard let context else { return }
-                let state = Unmanaged<FocusMonitorState>.fromOpaque(context).takeUnretainedValue()
-                state.observeWindowNotification(element)
-            }, &observer)
-
-            if created == .success, let observer {
-                let registered = AXObserverAddNotification(
-                    observer,
-                    application,
-                    kAXFocusedWindowChangedNotification as CFString,
-                    Unmanaged.passUnretained(state).toOpaque()
-                )
-                if registered == .success {
-                    windowObserver = observer
-                    observedApplication = application
-                    CFRunLoopAddSource(runLoop, AXObserverGetRunLoopSource(observer), .commonModes)
-                } else {
-                    state.markInconclusive()
-                }
-            } else {
-                state.markInconclusive()
+            windowObserver = environment.observeWindow(pid) { [weak state] element in
+                guard let state else { return }
+                state.observeWindowNotification(element, role: environment.role(element))
+                state.observeCurrent(environment.capture())
             }
+            if windowObserver == nil { state.markInconclusive() }
         } else {
             state.markInconclusive()
         }
 
         // Close the interval between the initial snapshot and notification registration.
-        state.observeCurrent()
+        state.observeCurrent(environment.capture())
     }
 
     func preserved() -> Bool? {
         guard !stopped else { return nil }
         // Drain notifications already queued during synchronous accessibility work. This
         // also catches an app/window switch followed by a return to the original focus.
-        CFRunLoopRunInMode(.defaultMode, 0.001, false)
-        state.observeCurrent()
+        environment.drainNotifications()
+        state.observeCurrent(environment.capture())
         return state.result()
     }
 
     func stop() {
         guard !stopped else { return }
         stopped = true
-        if let activationObserver {
-            notificationCenter.removeObserver(activationObserver)
-            self.activationObserver = nil
-        }
-        if let windowObserver {
-            // Remove delivery before releasing the callback's unretained state context.
-            CFRunLoopRemoveSource(runLoop, AXObserverGetRunLoopSource(windowObserver), .commonModes)
-            if let observedApplication {
-                AXObserverRemoveNotification(
-                    windowObserver, observedApplication, kAXFocusedWindowChangedNotification as CFString
-                )
-            }
-            self.windowObserver = nil
-            observedApplication = nil
-        }
+        activationObserver?.cancel()
+        activationObserver = nil
+        windowObserver?.cancel()
+        windowObserver = nil
     }
 
     deinit { stop() }
 }
 
-private struct MonitoredFocus {
+struct MonitoredFocus {
     let pid: pid_t?
     let window: AXUIElement?
 
     static func capture() -> MonitoredFocus {
-        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
+        capture(frontmostPID: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
+                focusedWindow: readFocusedWindow)
+    }
+
+    static func capture(frontmostPID: () -> pid_t?, focusedWindow: (pid_t) -> AXUIElement?) -> MonitoredFocus {
+        guard let pid = frontmostPID() else {
             return MonitoredFocus(pid: nil, window: nil)
         }
+        let window = focusedWindow(pid)
+        let afterPID = frontmostPID()
+        guard afterPID == pid else {
+            return MonitoredFocus(pid: afterPID, window: nil)
+        }
+        return MonitoredFocus(pid: pid, window: window)
+    }
+
+    private static func readFocusedWindow(pid: pid_t) -> AXUIElement? {
         let application = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(application, 0.25)
         var rawWindow: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &rawWindow)
-        let afterPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        guard afterPID == pid else {
-            return MonitoredFocus(pid: afterPID, window: nil)
-        }
         guard error == .success, let rawWindow, CFGetTypeID(rawWindow) == AXUIElementGetTypeID() else {
-            return MonitoredFocus(pid: pid, window: nil)
+            return nil
         }
-        return MonitoredFocus(pid: pid, window: (rawWindow as! AXUIElement))
+        return (rawWindow as! AXUIElement)
     }
 }
 
@@ -140,26 +115,20 @@ private final class FocusMonitorState: @unchecked Sendable {
         if pid != baselinePID { markChanged() }
     }
 
-    func observeWindowNotification(_ element: AXUIElement) {
+    func observeWindowNotification(_ element: AXUIElement, role: String?) {
         // Some applications send the new window; others send the application object.
         // A different window in the event must remain recorded even if focus returned
         // before the callback was delivered.
-        var rawRole: CFTypeRef?
-        AXUIElementSetMessagingTimeout(element, 0.25)
-        let error = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &rawRole)
-        if error == .success, rawRole as? String == kAXWindowRole,
-           let baselineWindow = baseline.window {
+        if role == kAXWindowRole, let baselineWindow = baseline.window {
             if !CFEqual(baselineWindow, element) { markChanged() }
         } else {
             // The notification itself says the focused window changed. An application
             // object cannot establish which window was focused at the event's time.
             markChanged()
         }
-        observeCurrent()
     }
 
-    func observeCurrent() {
-        let current = MonitoredFocus.capture()
+    func observeCurrent(_ current: MonitoredFocus) {
         guard let baselinePID = baseline.pid, let currentPID = current.pid else {
             markInconclusive()
             return
