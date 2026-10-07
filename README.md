@@ -85,9 +85,9 @@ All commands support `--json`. Only status commands support `--window N`.
 command, for example `teams-cli hand --help` or `teams-cli hand status --help`.
 
 ```sh
-.build/release/teams-cli mic status --json
-.build/release/teams-cli camera off
-.build/release/teams-cli hand toggle --json
+teams-cli mic status --json
+teams-cli camera off
+teams-cli hand toggle --json
 ```
 
 ## Selecting a call window
@@ -101,8 +101,8 @@ Multiple remaining call windows produce `ambiguous`; the CLI never silently
 chooses the first. For status reads, use an index from the JSON output:
 
 ```sh
-.build/release/teams-cli mic status --json
-.build/release/teams-cli mic status --json --window 1
+teams-cli mic status --json
+teams-cli mic status --json --window 1
 ```
 
 Indices are 1-based positions in Teams' current Accessibility window list. They
