@@ -1,35 +1,34 @@
 import AppKit
 import ApplicationServices
 
+protocol AccessibilityExposureClient {
+    func sameGeneration() -> Bool?
+    func read() -> Bool?
+    /// Setter success is not evidence; the subsequent readback determines the result.
+    func write(_ value: Bool)
+    func waitForValue(_ expected: Bool) -> AccessibilityExposureReadiness.Result
+}
+
 /// Temporarily enables Teams' enhanced accessibility tree and restores its prior value.
 /// This writes only AXEnhancedUserInterface; it never activates or raises a window.
 final class TeamsAccessibilityExposure {
-    private let pid: pid_t
-    private let launched: Date
-    private let application: AXUIElement
+    private let client: any AccessibilityExposureClient
     private let original: Bool
-    private let attributeName = "AXEnhancedUserInterface" as CFString
     private var needsRestore = false
     private var restorationResult: Bool?
 
-    init() throws {
-        let applications = NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.teams2")
-            .filter { !$0.isTerminated }
-        guard applications.count == 1, let running = applications.first,
-              let launched = running.launchDate else {
+    convenience init() throws {
+        try self.init(client: SystemAccessibilityExposureClient())
+    }
+
+    init(client: any AccessibilityExposureClient) throws {
+        guard let original = client.read() else {
             throw MicrophoneCommandError.accessibilitySetupUnavailable
         }
-        let application = AXUIElementCreateApplication(running.processIdentifier)
-        AXUIElementSetMessagingTimeout(application, 0.25)
-        guard let original = Self.read(application) else {
-            throw MicrophoneCommandError.accessibilitySetupUnavailable
-        }
-        self.pid = running.processIdentifier
-        self.launched = launched
-        self.application = application
+        self.client = client
         self.original = original
 
-        guard sameGeneration() == true else {
+        guard client.sameGeneration() == true else {
             throw MicrophoneCommandError.accessibilitySetupUnavailable
         }
         guard !original else { return }
@@ -37,8 +36,8 @@ final class TeamsAccessibilityExposure {
         // A setter can report an error after applying the value. From this point,
         // cleanup is required regardless of the setter's return code.
         needsRestore = true
-        _ = AXUIElementSetAttributeValue(application, attributeName, kCFBooleanTrue)
-        guard waitForValue(true) == .confirmed else {
+        client.write(true)
+        guard client.waitForValue(true) == .confirmed else {
             guard restore() else {
                 throw MicrophoneCommandError.accessibilityCleanupFailed
             }
@@ -59,25 +58,23 @@ final class TeamsAccessibilityExposure {
 
     private func restoreOnce() -> Bool {
         guard needsRestore else { return true }
-        guard let sameBeforeRead = sameGeneration() else { return false }
+        guard let sameBeforeRead = client.sameGeneration() else { return false }
         guard sameBeforeRead else {
             needsRestore = false
             return true
         }
-        if Self.read(application) == original {
+        if client.read() == original {
             needsRestore = false
             return true
         }
         // Recheck after reading: never intentionally write to a reused process ID.
-        guard let sameBeforeWrite = sameGeneration() else { return false }
+        guard let sameBeforeWrite = client.sameGeneration() else { return false }
         guard sameBeforeWrite else {
             needsRestore = false
             return true
         }
-        _ = AXUIElementSetAttributeValue(
-            application, attributeName, original ? kCFBooleanTrue : kCFBooleanFalse
-        )
-        switch waitForValue(original) {
+        client.write(original)
+        switch client.waitForValue(original) {
         case .confirmed, .processGone:
             needsRestore = false
             return true
@@ -86,29 +83,54 @@ final class TeamsAccessibilityExposure {
         }
     }
 
-    private func waitForValue(_ expected: Bool) -> AccessibilityExposureReadiness.Result {
+    // Emergency fallback when a caller exits without explicitly finalizing cleanup.
+    deinit { restore() }
+}
+
+private struct SystemAccessibilityExposureClient: AccessibilityExposureClient {
+    let pid: pid_t
+    let launched: Date
+    let application: AXUIElement
+
+    init() throws {
+        let applications = NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.teams2")
+            .filter { !$0.isTerminated }
+        guard applications.count == 1, let running = applications.first,
+              let launched = running.launchDate else {
+            throw MicrophoneCommandError.accessibilitySetupUnavailable
+        }
+        pid = running.processIdentifier
+        self.launched = launched
+        application = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(application, 0.25)
+    }
+
+    func write(_ value: Bool) {
+        _ = AXUIElementSetAttributeValue(
+            application, "AXEnhancedUserInterface" as CFString, value ? kCFBooleanTrue : kCFBooleanFalse
+        )
+    }
+
+    func waitForValue(_ expected: Bool) -> AccessibilityExposureReadiness.Result {
         // Later setup/cleanup reads retain the usual per-message timeout.
         defer { AXUIElementSetMessagingTimeout(application, 0.25) }
         return AccessibilityExposureReadiness(sameGeneration: sameGeneration, read: { timeout in
             AXUIElementSetMessagingTimeout(self.application, Float(timeout))
-            return Self.read(self.application)
+            return self.read()
         }).waitFor(expected)
     }
 
-    private func sameGeneration() -> Bool? {
+    func sameGeneration() -> Bool? {
         guard let running = NSRunningApplication(processIdentifier: pid) else { return false }
         guard !running.isTerminated else { return false }
         guard let currentLaunch = running.launchDate else { return nil }
         return currentLaunch == launched
     }
 
-    private static func read(_ application: AXUIElement) -> Bool? {
+    func read() -> Bool? {
         var raw: CFTypeRef?
         guard AXUIElementCopyAttributeValue(application, "AXEnhancedUserInterface" as CFString, &raw) == .success,
               let raw, CFGetTypeID(raw) == CFBooleanGetTypeID() else { return nil }
         return raw as? Bool
     }
-
-    // Emergency fallback when a caller exits without explicitly finalizing cleanup.
-    deinit { restore() }
 }

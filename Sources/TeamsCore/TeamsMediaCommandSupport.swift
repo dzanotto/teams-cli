@@ -1,6 +1,27 @@
 import AppKit
 import ApplicationServices
-import Darwin
+
+protocol MediaCommandFocus {
+    func preserved() -> Bool?
+    func stop()
+}
+
+extension FocusMonitor: MediaCommandFocus {}
+
+/// Keeps lifecycle tests independent of the desktop while exercising the real lock and cleanup.
+struct MediaCommandEnvironment<Focus: MediaCommandFocus> {
+    let isTrusted: () -> Bool
+    let acquireLock: () throws -> MediaCommandLock
+    let makeFocus: () -> Focus
+    let makeExposure: () throws -> TeamsAccessibilityExposure
+}
+
+extension MediaCommandEnvironment where Focus == FocusMonitor {
+    static var live: Self {
+        Self(isTrusted: { AXIsProcessTrusted() }, acquireLock: { try MediaCommandLock() },
+             makeFocus: { FocusMonitor() }, makeExposure: { try TeamsAccessibilityExposure() })
+    }
+}
 
 /// Shared lifecycle: lock, observe focus, expose AX, act, restore, finalize.
 enum TeamsMediaCommandSupport {
@@ -8,7 +29,15 @@ enum TeamsMediaCommandSupport {
         _ operation: (FocusMonitor) throws -> Result,
         onFinalizationFailure: (Result, String, Bool?) -> Result
     ) throws -> Result {
-        try perform(operation, onFinalization: { result, restored, focus in
+        try perform(operation, environment: .live, onFinalizationFailure: onFinalizationFailure)
+    }
+
+    static func perform<Result, Focus: MediaCommandFocus>(
+        _ operation: (Focus) throws -> Result,
+        environment: MediaCommandEnvironment<Focus>,
+        onFinalizationFailure: (Result, String, Bool?) -> Result
+    ) throws -> Result {
+        try perform(operation, environment: environment, onFinalization: { result, restored, focus in
             guard restored, focus == true else {
                 let reason = !restored ? "accessibility_cleanup_failed" :
                     (focus == nil ? "focus_unavailable" : "focus_changed")
@@ -23,14 +52,22 @@ enum TeamsMediaCommandSupport {
         _ operation: (FocusMonitor) throws -> Result,
         onFinalization: (Result, Bool, Bool?) -> Result
     ) throws -> Result {
-        guard AXIsProcessTrusted() else { throw TeamsReadError.accessibilityDenied }
-        let commandLock = try MediaCommandLock()
+        try perform(operation, environment: .live, onFinalization: onFinalization)
+    }
+
+    static func perform<Result, Focus: MediaCommandFocus>(
+        _ operation: (Focus) throws -> Result,
+        environment: MediaCommandEnvironment<Focus>,
+        onFinalization: (Result, Bool, Bool?) -> Result
+    ) throws -> Result {
+        guard environment.isTrusted() else { throw TeamsReadError.accessibilityDenied }
+        let commandLock = try environment.acquireLock()
         defer { commandLock.release() }
-        let focus = FocusMonitor()
+        let focus = environment.makeFocus()
         defer { focus.stop() }
         let exposure: TeamsAccessibilityExposure
         do {
-            exposure = try TeamsAccessibilityExposure()
+            exposure = try environment.makeExposure()
         } catch {
             // Initialization finalizes any setup cleanup before throwing. Drain focus
             // observations while monitoring is still alive; no cleanup writes follow.
@@ -53,42 +90,6 @@ enum TeamsMediaCommandSupport {
         let finalFocus = focus.preserved()
         return onFinalization(result, restored, finalFocus)
     }
-}
-
-private final class MediaCommandLock {
-    private var descriptor: Int32
-
-    init() throws {
-        // Retain the original microphone lock path so camera/hand/call commands also serialize
-        // with older microphone binaries. Keep the inode when releasing the lock.
-        let path = "/tmp/teams-cli-microphone-\(getuid()).lock"
-        descriptor = open(path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
-        guard descriptor >= 0 else { throw MicrophoneCommandError.lockUnavailable }
-        var metadata = stat()
-        guard fstat(descriptor, &metadata) == 0,
-              metadata.st_uid == getuid(),
-              metadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
-              metadata.st_mode & mode_t(0o077) == 0 else {
-            close(descriptor)
-            descriptor = -1
-            throw MicrophoneCommandError.lockUnavailable
-        }
-        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
-            let busy = errno == EWOULDBLOCK
-            close(descriptor)
-            descriptor = -1
-            throw busy ? MicrophoneCommandError.commandInProgress : .lockUnavailable
-        }
-    }
-
-    func release() {
-        if descriptor >= 0 {
-            close(descriptor)
-            descriptor = -1
-        }
-    }
-
-    deinit { release() }
 }
 
 struct MediaSelection<State> {
