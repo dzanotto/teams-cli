@@ -11,6 +11,21 @@ desktop app, or leave your active call. The CLI uses macOS Accessibility and
 reports Teams' UI state; it does not measure audio/video capture or delivery to
 other participants.
 
+## Install with Homebrew
+
+Requires macOS 13+ and [Homebrew](https://brew.sh). Install from the custom
+[`dzanotto/tap`](https://github.com/dzanotto/homebrew-tap) tap:
+
+```sh
+brew tap dzanotto/tap
+brew install dzanotto/tap/teams-cli
+teams-cli --help
+```
+
+The formula installs a prebuilt executable, so Swift is not required.
+Grant [Accessibility permission](#accessibility-permission) to your terminal or
+launcher before using the CLI.
+
 ## Download a release
 
 Download an archive and `SHA256SUMS` from
