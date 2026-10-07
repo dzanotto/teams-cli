@@ -3,9 +3,10 @@
 ## Project Structure & Module Organization
 
 This dependency-free Swift package targets macOS 13+ and requires Swift 6+.
-- `Sources/TeamsCLI/main.swift`: argument parsing, help, text/JSON output, and exit codes.
+- `Sources/TeamsCLI/`: process entry point, argument parsing, help, text/JSON output, and exit codes.
 - `Sources/TeamsCore/`: Accessibility readers, state classifiers, control-specific controllers, and shared action/focus handling.
 - `Tests/TeamsCoreTests/`: XCTest suites with fake backends and scripted Accessibility observations.
+- `Tests/TeamsCLITests/`: CLI contracts with fake command handlers and executable smoke tests.
 - `Package.swift`: package targets; `README.md`: command contracts and validation evidence. Build artifacts belong in ignored `.build/`; there is no asset directory.
 
 ## Build, Test, and Development Commands

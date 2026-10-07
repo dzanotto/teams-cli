@@ -8,6 +8,7 @@ let package = Package(
     targets: [
         .target(name: "TeamsCore"),
         .executableTarget(name: "TeamsCLI", dependencies: ["TeamsCore"]),
-        .testTarget(name: "TeamsCoreTests", dependencies: ["TeamsCore"])
+        .testTarget(name: "TeamsCoreTests", dependencies: ["TeamsCore"]),
+        .testTarget(name: "TeamsCLITests", dependencies: ["TeamsCLI", "TeamsCore"])
     ]
 )
