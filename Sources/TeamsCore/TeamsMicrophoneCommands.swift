@@ -8,20 +8,33 @@ public enum MicrophoneCommandError: Error {
 /// Serializes cooperating media commands and changes the selected microphone button.
 public enum TeamsMicrophoneCommands {
     public static func set(_ target: MicrophoneTarget) throws -> MicrophoneActionResult {
-        try perform { try $0.set(target) }
+        try set(target, environment: .live)
     }
 
     /// Inverts the first confirmed microphone state within the shared command lock.
     public static func toggle() throws -> MicrophoneActionResult {
-        try perform { try $0.toggle() }
+        try toggle(environment: .live)
     }
 
-    private static func perform(
-        _ operation: (MicrophoneController) throws -> MicrophoneActionResult
+    static func set<Focus: MediaCommandFocus>(
+        _ target: MicrophoneTarget, environment: MediaActionEnvironment<Focus>
+    ) throws -> MicrophoneActionResult {
+        try perform({ try $0.set(target) }, environment: environment)
+    }
+
+    static func toggle<Focus: MediaCommandFocus>(environment: MediaActionEnvironment<Focus>) throws -> MicrophoneActionResult {
+        try perform({ try $0.toggle() }, environment: environment)
+    }
+
+    private static func perform<Focus: MediaCommandFocus>(
+        _ operation: (MicrophoneController) throws -> MicrophoneActionResult,
+        environment: MediaActionEnvironment<Focus>
     ) throws -> MicrophoneActionResult {
         try TeamsMediaCommandSupport.perform({ focus in
-            try operation(MicrophoneController(backend: AccessibilityMicrophoneBackend(focus: focus)))
-        }, onFinalizationFailure: { result, reason, focus in
+            let backend = AccessibilityMicrophoneBackend(accessibility: environment.makeAccessibility(),
+                                                         checkFocus: focus.preserved, waitForUpdate: environment.waitForUpdate)
+            return try operation(MicrophoneController(backend: backend))
+        }, environment: environment.lifecycle, onFinalizationFailure: { result, reason, focus in
             MicrophoneActionResult(state: .unknown, reason: reason,
                                    changed: result.actionAttempted ? nil : false,
                                    actionAttempted: result.actionAttempted, focusUnchanged: focus,
@@ -33,9 +46,12 @@ public enum TeamsMicrophoneCommands {
 
 private final class AccessibilityMicrophoneBackend: MicrophoneBackend {
     private let native: NativeMediaBackend<MicrophoneAssessment, MicrophoneState>
+    private let wait: () -> Void
 
-    init(focus: FocusMonitor) {
-        native = NativeMediaBackend(control: .microphone, focus: focus,
+    init(accessibility: any MediaAccessibilityClient, checkFocus: @escaping () -> Bool?,
+         waitForUpdate: @escaping () -> Void) {
+        wait = waitForUpdate
+        native = NativeMediaBackend(control: .microphone, accessibility: accessibility, checkFocus: checkFocus,
                                     stateChangedReason: "microphone_state_changed",
                                     classify: MicrophoneClassifier.assess) { assessment in
             guard assessment.state == .muted || assessment.state == .unmuted,
@@ -55,5 +71,5 @@ private final class AccessibilityMicrophoneBackend: MicrophoneBackend {
     }
 
     func focusPreserved() -> Bool? { native.focusPreserved() }
-    func waitForUpdate() { native.waitForUpdate() }
+    func waitForUpdate() { wait() }
 }

@@ -1,20 +1,33 @@
 /// Serializes cooperating media commands and changes the selected camera button.
 public enum TeamsCameraCommands {
     public static func set(_ target: CameraTarget) throws -> CameraActionResult {
-        try perform { try $0.set(target) }
+        try set(target, environment: .live)
     }
 
     /// Inverts the first confirmed camera state within the shared command lock.
     public static func toggle() throws -> CameraActionResult {
-        try perform { try $0.toggle() }
+        try toggle(environment: .live)
     }
 
-    private static func perform(
-        _ operation: (CameraController) throws -> CameraActionResult
+    static func set<Focus: MediaCommandFocus>(
+        _ target: CameraTarget, environment: MediaActionEnvironment<Focus>
+    ) throws -> CameraActionResult {
+        try perform({ try $0.set(target) }, environment: environment)
+    }
+
+    static func toggle<Focus: MediaCommandFocus>(environment: MediaActionEnvironment<Focus>) throws -> CameraActionResult {
+        try perform({ try $0.toggle() }, environment: environment)
+    }
+
+    private static func perform<Focus: MediaCommandFocus>(
+        _ operation: (CameraController) throws -> CameraActionResult,
+        environment: MediaActionEnvironment<Focus>
     ) throws -> CameraActionResult {
         try TeamsMediaCommandSupport.perform({ focus in
-            try operation(CameraController(backend: AccessibilityCameraBackend(focus: focus)))
-        }, onFinalizationFailure: { result, reason, focus in
+            let backend = AccessibilityCameraBackend(accessibility: environment.makeAccessibility(),
+                                                     checkFocus: focus.preserved, waitForUpdate: environment.waitForUpdate)
+            return try operation(CameraController(backend: backend))
+        }, environment: environment.lifecycle, onFinalizationFailure: { result, reason, focus in
             CameraActionResult(state: .unknown, reason: reason,
                                changed: result.actionAttempted ? nil : false,
                                actionAttempted: result.actionAttempted, focusUnchanged: focus,
@@ -26,9 +39,12 @@ public enum TeamsCameraCommands {
 
 private final class AccessibilityCameraBackend: CameraBackend {
     private let native: NativeMediaBackend<CameraAssessment, CameraState>
+    private let wait: () -> Void
 
-    init(focus: FocusMonitor) {
-        native = NativeMediaBackend(control: .camera, focus: focus,
+    init(accessibility: any MediaAccessibilityClient, checkFocus: @escaping () -> Bool?,
+         waitForUpdate: @escaping () -> Void) {
+        wait = waitForUpdate
+        native = NativeMediaBackend(control: .camera, accessibility: accessibility, checkFocus: checkFocus,
                                     stateChangedReason: "camera_state_changed",
                                     classify: CameraClassifier.assess) { assessment in
             guard assessment.state == .on || assessment.state == .off,
@@ -48,5 +64,5 @@ private final class AccessibilityCameraBackend: CameraBackend {
     }
 
     func focusPreserved() -> Bool? { native.focusPreserved() }
-    func waitForUpdate() { native.waitForUpdate() }
+    func waitForUpdate() { wait() }
 }

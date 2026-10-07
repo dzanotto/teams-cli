@@ -151,15 +151,6 @@ final class NativeMediaBackend<Assessment, State: Equatable> {
     /// Every new sample invalidates it before reading, including failed reads.
     private var preflight: NativeMediaObservation<Assessment>?
 
-    convenience init(control: MediaControl, focus: FocusMonitor,
-                     stateChangedReason: String,
-                     classify: @escaping ([WindowSnapshot], Bool) -> Assessment,
-                     select: @escaping (Assessment) -> MediaSelection<State>?) {
-        self.init(control: control, accessibility: SystemMediaAccessibilityClient(),
-                  checkFocus: focus.preserved, stateChangedReason: stateChangedReason,
-                  classify: classify, select: select)
-    }
-
     init(control: MediaControl, accessibility: any MediaAccessibilityClient,
          checkFocus: @escaping () -> Bool?, stateChangedReason: String,
          classify: @escaping ([WindowSnapshot], Bool) -> Assessment,
@@ -245,8 +236,4 @@ final class NativeMediaBackend<Assessment, State: Equatable> {
     }
 
     func focusPreserved() -> Bool? { checkFocus() }
-
-    func waitForUpdate() {
-        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
-    }
 }

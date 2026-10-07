@@ -56,3 +56,73 @@ func temporaryCommandDirectory() throws -> URL {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
     return directory
 }
+
+final class LifecycleFocus: MediaCommandFocus {
+    var result: Bool? = true
+    var record: (String) -> Void = { _ in }
+    var onStop: (() -> Void)?
+
+    func preserved() -> Bool? {
+        record("focus.read")
+        return result
+    }
+
+    func stop() {
+        record("focus.stop")
+        onStop?()
+    }
+}
+
+final class CommandLifecycleHarness {
+    enum Failure: Error { case operation }
+    let directory: URL
+    var path: String { directory.appendingPathComponent("command.lock").path }
+    let client = ScriptedExposureClient()
+    let focus = LifecycleFocus()
+    var trusted = true
+    var operationError = false
+    var events: [String] = []
+
+    init() throws {
+        directory = try temporaryCommandDirectory()
+        client.record = { [weak self] in self?.events.append($0) }
+        focus.record = { [weak self] in self?.events.append($0) }
+    }
+
+    var environment: MediaCommandEnvironment<LifecycleFocus> {
+        MediaCommandEnvironment(isTrusted: {
+            self.events.append("permission")
+            return self.trusted
+        }, acquireLock: {
+            self.events.append("lock")
+            return try MediaCommandLock(path: self.path)
+        }, makeFocus: {
+            self.events.append("focus.start")
+            return self.focus
+        }, makeExposure: {
+            self.events.append("expose")
+            return try TeamsAccessibilityExposure(client: self.client)
+        })
+    }
+
+    func perform() throws -> Int {
+        try TeamsMediaCommandSupport.perform({ _ in
+            self.events.append("operation")
+            if self.operationError { throw Failure.operation }
+            return 42
+        }, environment: environment, onFinalization: { result, _, _ in
+            self.events.append("finalize")
+            return result
+        })
+    }
+
+    func assertLocked(file: StaticString = #filePath, line: UInt = #line) {
+        assertCommandError(.commandInProgress, file: file, line: line) { try MediaCommandLock(path: path) }
+    }
+
+    func assertUnlocked(file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertNoThrow(try MediaCommandLock(path: path).release(), file: file, line: line)
+    }
+
+    deinit { try? FileManager.default.removeItem(at: directory) }
+}
