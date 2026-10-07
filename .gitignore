@@ -1,3 +1,4 @@
 .build/
 .swiftpm/
+.scannerwork/
 .DS_Store

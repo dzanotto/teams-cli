@@ -40,12 +40,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Test, build, and check CLI help
         shell: bash
         run: |
           test "$(uname -m)" = "$EXPECTED_ARCH"
           swift --version
-          swift test
+          if [[ "$EXPECTED_ARCH" == arm64 ]]; then
+            swift test --enable-code-coverage
+            bash scripts/sonar-coverage.sh
+          else
+            swift test
+          fi
           swift build -c release
           .build/release/teams-cli --help
       - name: Check release packaging
@@ -60,3 +66,36 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
+      - name: Check SonarQube Cloud configuration
+        id: sonar
+        if: >-
+          matrix.arch == 'arm64' && inputs.release_tag == '' &&
+          (github.event_name == 'push' || github.event_name == 'pull_request') &&
+          github.ref_type != 'tag' &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository) &&
+          github.actor != 'dependabot[bot]'
+        env:
+          SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -z "$SONAR_ORGANIZATION" && -z "$SONAR_PROJECT_KEY" && -z "$SONAR_TOKEN" ]]; then
+            echo 'SonarQube Cloud is not configured. Set SONAR_ORGANIZATION and SONAR_PROJECT_KEY repository variables and the SONAR_TOKEN secret to enable analysis.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ -z "$SONAR_ORGANIZATION" || -z "$SONAR_PROJECT_KEY" || -z "$SONAR_TOKEN" ]]; then
+            echo '::error::Set SONAR_ORGANIZATION and SONAR_PROJECT_KEY variables and the SONAR_TOKEN secret.'
+            exit 1
+          fi
+          echo 'enabled=true' >> "$GITHUB_OUTPUT"
+      - name: Analyze with SonarQube Cloud
+        if: steps.sonar.outputs.enabled == 'true'
+        uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >-
+            -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }}
+            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
