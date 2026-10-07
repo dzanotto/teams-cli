@@ -4,9 +4,15 @@ import ApplicationServices
 public enum TeamsCallCommands {
     /// Leaves the one non-held call. Teams may change focus when its call window closes.
     public static func end() throws -> CallEndResult {
+        try end(environment: .live)
+    }
+
+    static func end<Focus: MediaCommandFocus>(environment: MediaActionEnvironment<Focus>) throws -> CallEndResult {
         try TeamsMediaCommandSupport.perform({ focus in
-            try CallEndController(backend: AccessibilityCallEndBackend(focus: focus)).end()
-        }, onFinalization: { result, restored, focus in
+            let backend = AccessibilityCallEndBackend(accessibility: environment.makeAccessibility(),
+                                                      checkFocus: focus.preserved, waitForUpdate: environment.waitForUpdate)
+            return try CallEndController(backend: backend).end()
+        }, environment: environment.lifecycle, onFinalization: { result, restored, focus in
             result.finalized(restored: restored, focus: focus)
         })
     }
@@ -41,14 +47,8 @@ final class AccessibilityCallEndBackend: CallEndBackend {
     private let deadline: TimeInterval
     private var target: CallEndTarget?
 
-    convenience init(focus: FocusMonitor) {
-        self.init(accessibility: SystemMediaAccessibilityClient(), checkFocus: focus.preserved)
-    }
-
     init(accessibility: any MediaAccessibilityClient, checkFocus: @escaping () -> Bool?,
-         waitForUpdate: @escaping () -> Void = {
-             RunLoop.current.run(until: Date().addingTimeInterval(0.15))
-         }) {
+         waitForUpdate: @escaping () -> Void) {
         self.accessibility = accessibility
         self.checkFocus = checkFocus
         wait = waitForUpdate
