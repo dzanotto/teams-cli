@@ -57,12 +57,13 @@ public struct CallEndResult: Codable {
     public let success: Bool
 
     func finalized(restored: Bool, focus: Bool?) -> CallEndResult {
-        CallEndResult(state: restored ? state : .unknown,
-                      reason: restored ? reason : "accessibility_cleanup_failed",
-                      changed: restored ? changed : (actionAttempted ? nil : false),
-                      actionAttempted: actionAttempted, focusUnchanged: focus,
-                      windows: windows, excludedWindows: excludedWindows,
-                      success: restored && success)
+        let changedAfterCleanupFailure: Bool? = actionAttempted ? nil : false
+        return CallEndResult(state: restored ? state : .unknown,
+                             reason: restored ? reason : "accessibility_cleanup_failed",
+                             changed: restored ? changed : changedAfterCleanupFailure,
+                             actionAttempted: actionAttempted, focusUnchanged: focus,
+                             windows: windows, excludedWindows: excludedWindows,
+                             success: restored && success)
     }
 }
 

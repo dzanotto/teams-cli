@@ -39,8 +39,8 @@ enum TeamsMediaCommandSupport {
     ) throws -> Result {
         try perform(operation, environment: environment, onFinalization: { result, restored, focus in
             guard restored, focus == true else {
-                let reason = !restored ? "accessibility_cleanup_failed" :
-                    (focus == nil ? "focus_unavailable" : "focus_changed")
+                let focusReason = focus == nil ? "focus_unavailable" : "focus_changed"
+                let reason = !restored ? "accessibility_cleanup_failed" : focusReason
                 return onFinalizationFailure(result, reason, focus)
             }
             return result

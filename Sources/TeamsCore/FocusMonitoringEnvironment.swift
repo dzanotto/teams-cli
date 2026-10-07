@@ -53,13 +53,8 @@ struct FocusMonitoringEnvironment {
             )
             guard registered == .success else { return nil }
             CFRunLoopAddSource(runLoop, AXObserverGetRunLoopSource(observer), .commonModes)
-            return FocusObservation {
-                // Keep the callback context alive until native delivery has been removed.
-                withExtendedLifetime(callback) {
-                    CFRunLoopRemoveSource(runLoop, AXObserverGetRunLoopSource(observer), .commonModes)
-                    AXObserverRemoveNotification(observer, application, kAXFocusedWindowChangedNotification as CFString)
-                }
-            }
+            return makeWindowObservation(observer: observer, application: application,
+                                         runLoop: runLoop, callback: callback)
         }, role: { element in
             var rawRole: CFTypeRef?
             AXUIElementSetMessagingTimeout(element, 0.25)
@@ -68,6 +63,17 @@ struct FocusMonitoringEnvironment {
         }, drainNotifications: {
             CFRunLoopRunInMode(.defaultMode, 0.001, false)
         })
+    }
+
+    private static func makeWindowObservation(observer: AXObserver, application: AXUIElement,
+                                              runLoop: CFRunLoop?, callback: FocusWindowCallback) -> FocusObservation {
+        FocusObservation {
+            // Keep the callback context alive until native delivery has been removed.
+            withExtendedLifetime(callback) {
+                CFRunLoopRemoveSource(runLoop, AXObserverGetRunLoopSource(observer), .commonModes)
+                AXObserverRemoveNotification(observer, application, kAXFocusedWindowChangedNotification as CFString)
+            }
+        }
     }
 }
 
