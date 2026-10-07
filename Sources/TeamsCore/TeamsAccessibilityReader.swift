@@ -45,40 +45,42 @@ public final class TeamsAccessibilityReader {
     private let maxNodes = 12_000
     private let maxDepth = 80
     private let maxSeconds: TimeInterval = 8
+    private let environment: AccessibilityReaderEnvironment
 
-    public init() {}
+    public convenience init() { self.init(environment: .live) }
+
+    init(environment: AccessibilityReaderEnvironment) { self.environment = environment }
 
     public func read(control: MediaControl = .microphone, timeout: TimeInterval = 8) throws -> TeamsSnapshot {
-        guard AXIsProcessTrusted() else { throw TeamsReadError.accessibilityDenied }
-        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.teams2")
+        guard environment.isTrusted() else { throw TeamsReadError.accessibilityDenied }
+        let apps = environment.runningApplications("com.microsoft.teams2")
         guard !apps.isEmpty else { throw TeamsReadError.notRunning }
-        let focusBefore = FocusSnapshot.capture()
-        let deadline = ProcessInfo.processInfo.systemUptime + min(maxSeconds, max(0, timeout))
+        let focusBefore = environment.captureFocus()
+        let deadline = environment.uptime() + min(maxSeconds, max(0, timeout))
 
         // Chromium enables its native accessibility tree when the browser app's role is read.
         // Teams' web content is hosted by this background helper, not its main application.
         // Helpers can share a bundle ID; query only the browser executable, not renderers/utilities.
-        for helper in NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.teams2.helper") {
-            guard helper.executableURL?.lastPathComponent == "Microsoft Teams WebView" else { continue }
-            let element = AXUIElementCreateApplication(helper.processIdentifier)
-            AXUIElementSetMessagingTimeout(element, 0.25)
-            _ = attribute(element, kAXRoleAttribute)
+        for helper in environment.runningApplications("com.microsoft.teams2.helper") {
+            guard helper.executableName == "Microsoft Teams WebView" else { continue }
+            environment.setMessagingTimeout(helper.element, 0.25)
+            _ = environment.copyAttribute(helper.element, kAXRoleAttribute)
         }
 
         var result = try scan(apps, control: control, deadline: deadline)
         // The web tree can appear asynchronously after the role query. Retry once without
         // changing focus or enabling screen-reader mode. The scan itself is bounded.
-        if ProcessInfo.processInfo.systemUptime + 0.25 < deadline && result.complete && !result.windows.contains(where: { window in
+        if environment.uptime() + 0.25 < deadline && result.complete && !result.windows.contains(where: { window in
             window.controls.contains(where: { $0.identifier == control.rawValue })
         }) {
-            Thread.sleep(forTimeInterval: 0.25)
+            environment.sleep(0.25)
             result = try scan(apps, control: control, deadline: deadline)
         }
         return TeamsSnapshot(windows: result.windows, complete: result.complete,
-                             focusUnchanged: focusBefore.matches(FocusSnapshot.capture()), handles: result.handles)
+                             focusUnchanged: focusBefore.matches(environment.captureFocus()), handles: result.handles)
     }
 
-    private func scan(_ apps: [NSRunningApplication], control: MediaControl, deadline: TimeInterval) throws -> TeamsSnapshot {
+    private func scan(_ apps: [AccessibilityReaderApplication], control: MediaControl, deadline: TimeInterval) throws -> TeamsSnapshot {
         var visited = Set<AXUIElement>()
         var scheduled = Set<AXUIElement>()
         var complete = true
@@ -86,29 +88,29 @@ public final class TeamsAccessibilityReader {
         var handles: [Int: CallWindowHandles] = [:]
 
         for app in apps {
-            let root = AXUIElementCreateApplication(app.processIdentifier)
-            AXUIElementSetMessagingTimeout(root, 0.25)
-            let (rawWindows, error) = attribute(root, kAXWindowsAttribute)
+            let root = app.element
+            environment.setMessagingTimeout(root, 0.25)
+            let (rawWindows, error) = environment.copyAttribute(root, kAXWindowsAttribute)
             guard error == .success, let windows = rawWindows as? [AXUIElement] else {
                 throw TeamsReadError.accessibilityFailure(error.rawValue)
             }
             for window in windows {
                 var controls: [ControlSnapshot] = []
-                var windowHandles = CallWindowHandles(application: app, window: window)
+                var windowHandles = CallWindowHandles(application: app.application, window: window)
                 var queue: [(AXUIElement, Int)] = []
                 if scheduled.count < maxNodes && scheduled.insert(window).inserted {
                     queue.append((window, 0))
                 } else { complete = false }
                 var cursor = 0
                 while cursor < queue.count {
-                    guard visited.count < maxNodes, ProcessInfo.processInfo.systemUptime < deadline else {
+                    guard visited.count < maxNodes, environment.uptime() < deadline else {
                         complete = false
                         break
                     }
                     let (node, depth) = queue[cursor]
                     cursor += 1
                     guard visited.insert(node).inserted else { continue }
-                    AXUIElementSetMessagingTimeout(node, 0.25)
+                    environment.setMessagingTimeout(node, 0.25)
                     let fields = attributes(node, [kAXRoleAttribute, kAXChildrenAttribute])
                     if fields.failed { complete = false }
                     let role = fields.values[0] as? String ?? ""
@@ -160,64 +162,32 @@ public final class TeamsAccessibilityReader {
         }
         return TeamsSnapshot(windows: snapshots, complete: complete, focusUnchanged: nil, handles: handles)
     }
-}
 
-private func attribute(_ element: AXUIElement, _ name: String) -> (CFTypeRef?, AXError) {
-    var value: CFTypeRef?
-    let error = AXUIElementCopyAttributeValue(element, name as CFString, &value)
-    return (value, error)
+    private func attributes(_ element: AXUIElement, _ names: [String]) -> AttributeValues {
+        let (raw, error) = environment.copyAttributes(element, names)
+        guard error == .success, let array = raw as? [Any], array.count == names.count else {
+            return AttributeValues(values: Array(repeating: nil, count: names.count), failed: true)
+        }
+        var failed = false
+        let values: [Any?] = array.map { item in
+            if CFGetTypeID(item as CFTypeRef) == AXValueGetTypeID() {
+                let wrapped = item as! AXValue
+                if AXValueGetType(wrapped) == .axError {
+                    var code = AXError.success
+                    AXValueGetValue(wrapped, .axError, &code)
+                    // Absent optional attributes and leaf children are ordinary. Communication
+                    // failures or inaccessible nodes make the overall result inconclusive.
+                    if code != .attributeUnsupported && code != .noValue { failed = true }
+                    return nil
+                }
+            }
+            return item
+        }
+        return AttributeValues(values: values, failed: failed)
+    }
 }
 
 private struct AttributeValues {
     let values: [Any?]
     let failed: Bool
-}
-
-private func attributes(_ element: AXUIElement, _ names: [String]) -> AttributeValues {
-    var raw: CFArray?
-    let error = AXUIElementCopyMultipleAttributeValues(element, names as CFArray, [], &raw)
-    guard error == .success, let array = raw as? [Any], array.count == names.count else {
-        return AttributeValues(values: Array(repeating: nil, count: names.count), failed: true)
-    }
-    var failed = false
-    let values: [Any?] = array.map { item in
-        if CFGetTypeID(item as CFTypeRef) == AXValueGetTypeID() {
-            let wrapped = item as! AXValue
-            if AXValueGetType(wrapped) == .axError {
-                var code = AXError.success
-                AXValueGetValue(wrapped, .axError, &code)
-                // Absent optional attributes and leaf children are ordinary. Communication
-                // failures or inaccessible nodes make the overall result inconclusive.
-                if code != .attributeUnsupported && code != .noValue { failed = true }
-                return nil
-            }
-        }
-        return item
-    }
-    return AttributeValues(values: values, failed: failed)
-}
-
-private struct FocusSnapshot {
-    let pid: pid_t?
-    let window: AXUIElement?
-
-    static func capture() -> FocusSnapshot {
-        guard let app = NSWorkspace.shared.frontmostApplication else {
-            return FocusSnapshot(pid: nil, window: nil)
-        }
-        let root = AXUIElementCreateApplication(app.processIdentifier)
-        AXUIElementSetMessagingTimeout(root, 0.25)
-        let (raw, _) = attribute(root, kAXFocusedWindowAttribute)
-        let window: AXUIElement? = raw.flatMap {
-            CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil
-        }
-        return FocusSnapshot(pid: app.processIdentifier, window: window)
-    }
-
-    func matches(_ other: FocusSnapshot) -> Bool? {
-        guard let pid, let otherPID = other.pid else { return nil }
-        guard pid == otherPID else { return false }
-        guard let window, let otherWindow = other.window else { return nil }
-        return CFEqual(window, otherWindow)
-    }
 }
