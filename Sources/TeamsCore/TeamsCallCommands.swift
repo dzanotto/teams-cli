@@ -19,18 +19,13 @@ private struct CallEndTarget {
     let window: AXUIElement
     let button: AXUIElement
 
-    func owns(_ handles: CallWindowHandles) -> Bool {
-        handles.application.processIdentifier == pid && handles.application.launchDate == launched
+    func owns(_ generation: MediaProcessGeneration?) -> Bool {
+        generation?.pid == pid && generation?.launched == launched
     }
 
-    func matches(_ handles: CallWindowHandles) -> Bool {
-        owns(handles) && CFEqual(window, handles.window) &&
+    func matches(_ handles: CallWindowHandles, generation: MediaProcessGeneration?) -> Bool {
+        owns(generation) && CFEqual(window, handles.window) &&
             handles.hangups.count == 1 && CFEqual(button, handles.hangups[0])
-    }
-
-    var processStillRunning: Bool {
-        guard let application = NSRunningApplication(processIdentifier: pid) else { return false }
-        return !application.isTerminated && application.launchDate == launched
     }
 }
 
@@ -39,30 +34,46 @@ private enum CallEndAccessibilityError: Error {
     case pressFailed(Int32)
 }
 
-private final class AccessibilityCallEndBackend: CallEndBackend {
-    private let reader = TeamsAccessibilityReader()
-    private let focus: FocusMonitor
-    private let deadline = ProcessInfo.processInfo.systemUptime + 8
+final class AccessibilityCallEndBackend: CallEndBackend {
+    private let accessibility: any MediaAccessibilityClient
+    private let checkFocus: () -> Bool?
+    private let wait: () -> Void
+    private let deadline: TimeInterval
     private var target: CallEndTarget?
 
-    init(focus: FocusMonitor) { self.focus = focus }
+    convenience init(focus: FocusMonitor) {
+        self.init(accessibility: SystemMediaAccessibilityClient(), checkFocus: focus.preserved)
+    }
+
+    init(accessibility: any MediaAccessibilityClient, checkFocus: @escaping () -> Bool?,
+         waitForUpdate: @escaping () -> Void = {
+             RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+         }) {
+        self.accessibility = accessibility
+        self.checkFocus = checkFocus
+        wait = waitForUpdate
+        deadline = accessibility.uptime + 8
+    }
 
     func sample() throws -> CallEndObservation {
         let snapshot = try read()
         let assessment = CallEndClassifier.assess(snapshot.windows, complete: snapshot.complete)
         guard assessment.state == .active, assessment.reason == nil, assessment.windows.count == 1,
               let handles = snapshot.handles[assessment.windows[0].window],
-              handles.hangups.count == 1, let launched = handles.application.launchDate else {
+              handles.hangups.count == 1,
+              let generation = accessibility.generation(of: handles.application) else {
             return CallEndObservation(assessment: assessment, targetID: nil, canPress: false)
         }
         if target == nil {
-            target = CallEndTarget(pid: handles.application.processIdentifier, launched: launched,
+            target = CallEndTarget(pid: generation.pid, launched: generation.launched,
                                    window: handles.window, button: handles.hangups[0])
         }
-        guard let target, target.processStillRunning, target.matches(handles) else {
+        guard let target, accessibility.processMatches(pid: target.pid, launched: target.launched),
+              target.matches(handles, generation: generation) else {
             return CallEndObservation(assessment: assessment, targetID: nil, canPress: false)
         }
-        return CallEndObservation(assessment: assessment, targetID: target.id, canPress: canPress(target.button))
+        return CallEndObservation(assessment: assessment, targetID: target.id,
+                                  canPress: accessibility.canPress(target.button))
     }
 
     func press(targetID: String) throws {
@@ -71,44 +82,44 @@ private final class AccessibilityCallEndBackend: CallEndBackend {
         catch { throw CallEndPressRejected(reason: "preflight_failed") }
         if let reason = fresh.assessment.reason { throw CallEndPressRejected(reason: reason) }
         guard fresh.assessment.state == .active, fresh.targetID == targetID,
-              let target, target.processStillRunning else {
+              let target, accessibility.processMatches(pid: target.pid, launched: target.launched) else {
             throw CallEndPressRejected(reason: "target_changed")
         }
         guard fresh.canPress else { throw CallEndPressRejected(reason: "control_unavailable") }
 
-        let identifiers = ["AXDOMIdentifier", kAXIdentifierAttribute].compactMap { value(target.button, $0) as? String }
-        let labels = [kAXDescriptionAttribute, kAXTitleAttribute, kAXHelpAttribute].compactMap { value(target.button, $0) as? String }
-        let button = ControlSnapshot(role: value(target.button, kAXRoleAttribute) as? String ?? "",
-                                     identifier: identifiers.contains("hangup-button") ? "hangup-button" : "",
-                                     label: labels.first(where: { !$0.isEmpty }) ?? "")
+        let button = MediaButtonSnapshot.read(control: .call) { accessibility.value(target.button, $0) }
         guard CallEndClassifier.isLeaveButton(button) else {
             throw CallEndPressRejected(reason: "unrecognized_hangup_label")
         }
-        guard target.processStillRunning else { throw CallEndPressRejected(reason: "target_changed") }
-        guard canPress(target.button) else { throw CallEndPressRejected(reason: "control_unavailable") }
+        guard accessibility.processMatches(pid: target.pid, launched: target.launched) else {
+            throw CallEndPressRejected(reason: "target_changed")
+        }
+        guard accessibility.canPress(target.button) else { throw CallEndPressRejected(reason: "control_unavailable") }
         // Observe focus for reporting, but allow the change requested for call end.
-        _ = focus.preserved()
-        guard ProcessInfo.processInfo.systemUptime < deadline else {
+        _ = checkFocus()
+        guard accessibility.uptime < deadline else {
             throw CallEndPressRejected(reason: "preflight_failed")
         }
-        let error = AXUIElementPerformAction(target.button, kAXPressAction as CFString)
+        let error = accessibility.press(target.button)
         guard error == .success else { throw CallEndAccessibilityError.pressFailed(error.rawValue) }
     }
 
     func verify(targetID: String) throws -> CallEndVerification {
         let snapshot = try read()
         let assessment = CallEndClassifier.assess(snapshot.windows, complete: snapshot.complete)
-        guard let target, target.id == targetID, target.processStillRunning else {
+        guard let target, target.id == targetID,
+              accessibility.processMatches(pid: target.pid, launched: target.launched) else {
             return CallEndVerification(assessment: assessment, presence: .changed)
         }
         guard snapshot.complete else { return CallEndVerification(assessment: assessment, presence: .unconfirmed) }
-        let windows = snapshot.handles.values.filter { target.owns($0) }
+        let windows = snapshot.handles.values.filter { target.owns(accessibility.generation(of: $0.application)) }
         if let original = windows.first(where: { CFEqual($0.window, target.window) }) {
             let presence: CallEndPresence
             if original.hangups.isEmpty {
                 presence = .unconfirmed
             } else {
-                presence = target.matches(original) ? .sameCall : .changed
+                presence = target.matches(original, generation: accessibility.generation(of: original.application)) ?
+                    .sameCall : .changed
             }
             return CallEndVerification(assessment: assessment, presence: presence)
         }
@@ -119,25 +130,12 @@ private final class AccessibilityCallEndBackend: CallEndBackend {
         return CallEndVerification(assessment: assessment, presence: presence)
     }
 
-    func focusPreserved() -> Bool? { focus.preserved() }
-    func waitForUpdate() { RunLoop.current.run(until: Date().addingTimeInterval(0.15)) }
+    func focusPreserved() -> Bool? { checkFocus() }
+    func waitForUpdate() { wait() }
 
     private func read() throws -> TeamsSnapshot {
-        let remaining = deadline - ProcessInfo.processInfo.systemUptime
+        let remaining = deadline - accessibility.uptime
         guard remaining > 0 else { throw CallEndAccessibilityError.timedOut }
-        return try reader.read(control: .call, timeout: min(1.5, remaining))
-    }
-
-    private func canPress(_ element: AXUIElement) -> Bool {
-        guard value(element, kAXEnabledAttribute) as? Bool == true else { return false }
-        var actions: CFArray?
-        return AXUIElementCopyActionNames(element, &actions) == .success &&
-            (actions as? [String] ?? []).contains(kAXPressAction)
-    }
-
-    private func value(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
-        AXUIElementSetMessagingTimeout(element, 0.25)
-        var result: CFTypeRef?
-        return AXUIElementCopyAttributeValue(element, name as CFString, &result) == .success ? result : nil
+        return try accessibility.read(control: .call, timeout: min(1.5, remaining))
     }
 }
