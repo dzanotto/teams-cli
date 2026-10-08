@@ -59,6 +59,10 @@ The executable is written to `.build/release/teams-cli`. Use that path in place 
 `teams-cli` in the command reference below, or invoke it by absolute path from another
 directory.
 
+Ordinary source builds report `teams-cli dev` with `--version`, even from a tagged
+checkout. To embed a release version, use the build script described in
+[the release procedure](docs/releases.md#check-packaging-locally).
+
 The executable was renamed from `teams` to `teams-cli`; no compatibility alias is
 provided. Update existing scripts and integrations to use `.build/release/teams-cli`
 or its absolute path.
@@ -78,7 +82,7 @@ not request administrator privileges, microphone access, or screen recording.
 
 ## Command reference
 
-All commands support `--json`. Only status commands support `--window N`.
+All Teams commands below support `--json`. Only status commands support `--window N`.
 
 | Command | Behavior |
 | --- | --- |
@@ -98,6 +102,12 @@ All commands support `--json`. Only status commands support `--window N`.
 
 `--help` and `-h` work on their own, after a command group, or after a complete
 command, for example `teams-cli hand --help` or `teams-cli hand status --help`.
+
+`teams-cli --version` prints the embedded build version, for example
+`teams-cli 0.1.2`, followed by a newline. Ordinary source builds print `teams-cli dev`.
+Use `--version` on its own; combining it with commands, `--json`, or other flags
+returns exit code `64`. Help and version exit with code `0`, leave stderr empty,
+and work without Teams running or Accessibility permission.
 
 ```sh
 teams-cli mic status --json
@@ -180,8 +190,8 @@ stays open after leaving may end in Teams while the CLI returns an unverified re
 
 ## Output and exit codes
 
-Text output is one status word on stdout, with diagnostics on stderr. With
-`--json`, stdout is one JSON object. The state key is `microphone`, `camera`,
+For Teams commands, text output is one status word on stdout, with diagnostics on
+stderr. With `--json`, stdout is one JSON object. The state key is `microphone`, `camera`,
 `hand`, or `call`; results also contain `windows`, `excluded_windows`, and a
 `reason` for inconclusive or failed outcomes.
 
@@ -222,6 +232,7 @@ not a definitive overall status.
 | Code | Output | Meaning |
 | --- | --- | --- |
 | 0 | `muted` / `unmuted` / `on` / `off` / `raised` / `lowered` / `ended` | A recognized control state or verified call end |
+| 0 | Help text / `teams-cli <version>` | Help or version requested |
 | 2 | `unknown` / `ambiguous` | Inconclusive read or multiple possible controls |
 | 3 | `permission_denied` | Accessibility permission unavailable |
 | 4 | `not_running` | Teams was not found after the permission check |
@@ -264,12 +275,13 @@ conventions.
 
 ## CI and releases
 
-GitHub Actions runs the automated tests, a release build, CLI help, and an archive
-smoke check on pull requests and pushes to `main`, using native Apple Silicon and
+GitHub Actions runs the automated tests, a release build, CLI help and version,
+and an archive smoke check on pull requests and pushes to `main`, using native Apple Silicon and
 Intel macOS runners with Xcode 16.4. This does not validate live Teams behavior or
 runtime compatibility with every supported macOS version.
 
 Pushing a stable version tag such as `v0.1.0` runs the same checks on the tagged
 commit and publishes both archives, `SHA256SUMS`, and generated release notes to
-GitHub Releases. See [the release procedure](docs/releases.md) for exact commands
-and recovery instructions.
+GitHub Releases. The tag's version is embedded in each executable, and packaging
+checks that the binary and extracted archive report that version. See
+[the release procedure](docs/releases.md) for exact commands and recovery instructions.

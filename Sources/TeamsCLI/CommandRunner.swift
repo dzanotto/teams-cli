@@ -9,6 +9,7 @@ Usage: teams-cli mic status [--json] [--window N]
        teams-cli hand status [--json] [--window N]
        teams-cli hand <raise|lower|toggle> [--json]
        teams-cli call end [--json]
+       teams-cli --version
 
 Status output: mic = muted/unmuted; camera = on/off; hand = raised/lowered.
 Call end reports ended after verified closure of the selected call window.
@@ -24,8 +25,10 @@ Never explicitly activates Teams, sends keys, or shows permission dialogs.
   --json       Print machine-readable status and per-window results.
   --window N   Status only: inspect a window using its 1-based index from --json.
   -h, --help   Show this help, also after a command group or full command.
+  --version    Show the build version; use on its own without other arguments.
 
-Exit codes: 0 known state or verified action; 2 unknown/ambiguous; 3 accessibility denied;
+Exit codes: 0 help, version, known state, or verified action;
+            2 unknown/ambiguous; 3 accessibility denied;
             4 Teams not running; 5 read failure; 6 action refused/unverified;
             64 invalid arguments.
 """
@@ -125,6 +128,11 @@ struct CommandRunner {
     let writeStderr: (String) -> Void
 
     func run(_ arguments: [String]) -> Int32 {
+        if arguments == ["--version"] {
+            writeStdout("teams-cli \(BuildVersion.value)\n")
+            return 0
+        }
+
         if let last = arguments.last, ["--help", "-h"].contains(last),
            arguments.count == 1 ||
             (arguments.count == 2 && MediaCommand(rawValue: arguments[0]) != nil) ||

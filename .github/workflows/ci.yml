@@ -41,7 +41,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Test, build, and check CLI help
+      - name: Test, build, and check CLI help and version
         shell: bash
         run: |
           test "$(uname -m)" = "$EXPECTED_ARCH"
@@ -52,8 +52,9 @@ jobs:
           else
             swift test
           fi
-          swift build -c release
+          bash scripts/build-release.sh "${RELEASE_TAG:-v0.0.0}"
           .build/release/teams-cli --help
+          .build/release/teams-cli --version
       - name: Check release packaging
         shell: bash
         run: bash scripts/package-release.sh "${RELEASE_TAG:-v0.0.0}" "$EXPECTED_ARCH"

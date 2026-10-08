@@ -2,3 +2,4 @@
 .swiftpm/
 .scannerwork/
 .DS_Store
+Sources/TeamsCLI/BuildVersion.generated.swift

@@ -3,6 +3,31 @@ import XCTest
 @testable import TeamsCore
 
 final class CLIArgumentTests: XCTestCase {
+    func testVersionPrintsDevelopmentVersionWithoutInvokingHandlers() {
+        let stub = CLIStub()
+        stub.error = CLIStubError.unexpected
+        let result = stub.run(["--version"])
+        XCTAssertEqual(result.code, 0)
+        XCTAssertEqual(result.stdout, "teams-cli dev\n")
+        XCTAssertEqual(result.stderr, "")
+        XCTAssertEqual(stub.calls, [])
+    }
+
+    func testVersionRejectsOtherArgumentsAndAliases() {
+        for arguments in [["--version", "--json"], ["--json", "--version"],
+                          ["--version", "--help"], ["--help", "--version"],
+                          ["--version", "-h"], ["--version", "--version"],
+                          ["--version", "--window", "1"], ["--version=1"], ["-v"], ["-V"]] {
+            assertInvalid(arguments)
+        }
+        let commands = ["mic", "camera", "hand", "call"].map { [$0] } +
+            ["mic", "camera", "hand"].map { [$0, "status"] } + cliActionRoutes.map(\.arguments)
+        for command in commands {
+            assertInvalid(command + ["--version"])
+            assertInvalid(["--version"] + command)
+        }
+    }
+
     func testHelpAtRootGroupAndEveryValidCommandDoesNotInvokeHandlers() {
         let commands = [[String]()] + ["mic", "camera", "hand", "call"].map { [$0] } +
             ["mic", "camera", "hand"].map { [$0, "status"] } + cliActionRoutes.map(\.arguments)
@@ -29,8 +54,10 @@ final class CLIArgumentTests: XCTestCase {
                      "teams-cli hand status [--json] [--window N]",
                      "teams-cli hand <raise|lower|toggle> [--json]",
                      "teams-cli call end [--json]",
+                     "teams-cli --version", "--version    Show the build version;",
                      "--window N   Status only:", "-h, --help",
-                     "0 known state or verified action; 2 unknown/ambiguous; 3 accessibility denied;",
+                     "0 help, version, known state, or verified action;",
+                     "2 unknown/ambiguous; 3 accessibility denied;",
                      "4 Teams not running; 5 read failure; 6 action refused/unverified;",
                      "64 invalid arguments."] {
             XCTAssertTrue(help.contains(line), line)

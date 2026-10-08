@@ -17,11 +17,18 @@ repo_root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$repo_root"
 binary="$repo_root/.build/release/teams-cli"
 if [[ ! -x "$binary" ]]; then
-    echo 'Run swift build -c release before packaging.' >&2
+    echo "Run bash scripts/build-release.sh $release_tag before packaging." >&2
     exit 1
 fi
 if [[ "$(lipo -archs "$binary")" != "$release_arch" || "$(uname -m)" != "$release_arch" ]]; then
     echo 'The executable and packaging host must match the requested architecture.' >&2
+    exit 1
+fi
+
+expected_version="teams-cli ${release_tag#v}"
+reported_version=$("$binary" --version)
+if [[ "$reported_version" != "$expected_version" ]]; then
+    echo "The executable must report '$expected_version'. Run bash scripts/build-release.sh $release_tag before packaging." >&2
     exit 1
 fi
 
@@ -40,4 +47,9 @@ COPYFILE_DISABLE=1 tar -czf "$archive" -C "$staging_dir" "$package_name"
 mkdir "$staging_dir/extracted"
 tar -xzf "$archive" -C "$staging_dir/extracted"
 "$staging_dir/extracted/$package_name/teams-cli" --help > /dev/null
+extracted_version=$("$staging_dir/extracted/$package_name/teams-cli" --version)
+if [[ "$extracted_version" != "$expected_version" ]]; then
+    echo 'The extracted executable does not report the requested version.' >&2
+    exit 1
+fi
 printf 'Created %s\n' "$archive"

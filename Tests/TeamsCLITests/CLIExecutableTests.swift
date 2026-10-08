@@ -3,6 +3,13 @@ import Foundation
 import XCTest
 
 final class CLIExecutableTests: XCTestCase {
+    func testExecutableVersionPrintsDevelopmentVersion() throws {
+        let actual = try launch(["--version"])
+        XCTAssertEqual(actual.code, 0)
+        XCTAssertEqual(actual.stdout, "teams-cli dev\n")
+        XCTAssertEqual(actual.stderr, "")
+    }
+
     func testExecutableHelpMatchesRunnerAtRootGroupAndCommand() throws {
         for arguments in [["--help"], ["camera", "-h"], ["call", "end", "--help"]] {
             let actual = try launch(arguments)
@@ -15,7 +22,8 @@ final class CLIExecutableTests: XCTestCase {
 
     func testExecutableInvalidArgumentsReturn64WithUsageOnlyOnStderr() throws {
         for arguments in [[], ["call", "status"], ["mic", "status", "--json", "--json"],
-                          ["hand", "toggle", "--window", "1"]] {
+                          ["hand", "toggle", "--window", "1"], ["--version", "--json"],
+                          ["mic", "toggle", "--version"], ["--version", "--help"]] {
             let actual = try launch(arguments)
             let expected = CLIStub().run(arguments)
             XCTAssertEqual(actual.code, 64)
@@ -24,7 +32,7 @@ final class CLIExecutableTests: XCTestCase {
         }
     }
 
-    /// Only help and invalid arguments may be passed here: native actions require live authorization.
+    /// Only help, version, and invalid arguments may be passed here: native actions require live authorization.
     private func launch(_ arguments: [String]) throws -> CLIResult {
         let binaryDirectory = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
         let executable = binaryDirectory.appendingPathComponent("teams-cli")
