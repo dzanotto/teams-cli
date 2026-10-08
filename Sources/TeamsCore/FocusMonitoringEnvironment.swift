@@ -27,34 +27,11 @@ struct FocusMonitoringEnvironment {
 
     static var live: Self {
         let notificationCenter = NSWorkspace.shared.notificationCenter
-        let runLoop = CFRunLoopGetCurrent()
+        let windowClient = FocusWindowObserverClient<AXObserver>.live
         return Self(capture: MonitoredFocus.capture, observeActivation: { handler in
-            let observer = notificationCenter.addObserver(
-                forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: nil
-            ) { notification in
-                let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-                handler(application?.processIdentifier)
-            }
-            return FocusObservation { notificationCenter.removeObserver(observer) }
+            observeActivation(in: notificationCenter, handler: handler)
         }, observeWindow: { pid, handler in
-            let application = AXUIElementCreateApplication(pid)
-            AXUIElementSetMessagingTimeout(application, 0.25)
-            var observer: AXObserver?
-            let created = AXObserverCreate(pid, { _, element, _, context in
-                guard let context else { return }
-                let callback = Unmanaged<FocusWindowCallback>.fromOpaque(context).takeUnretainedValue()
-                callback.handler(element)
-            }, &observer)
-            guard created == .success, let observer else { return nil }
-            let callback = FocusWindowCallback(handler: handler)
-            let registered = AXObserverAddNotification(
-                observer, application, kAXFocusedWindowChangedNotification as CFString,
-                Unmanaged.passUnretained(callback).toOpaque()
-            )
-            guard registered == .success else { return nil }
-            CFRunLoopAddSource(runLoop, AXObserverGetRunLoopSource(observer), .commonModes)
-            return makeWindowObservation(observer: observer, application: application,
-                                         runLoop: runLoop, callback: callback)
+            windowClient.observe(pid: pid, handler: handler)
         }, role: { element in
             var rawRole: CFTypeRef?
             AXUIElementSetMessagingTimeout(element, 0.25)
@@ -65,20 +42,14 @@ struct FocusMonitoringEnvironment {
         })
     }
 
-    private static func makeWindowObservation(observer: AXObserver, application: AXUIElement,
-                                              runLoop: CFRunLoop?, callback: FocusWindowCallback) -> FocusObservation {
-        FocusObservation {
-            // Keep the callback context alive until native delivery has been removed.
-            withExtendedLifetime(callback) {
-                CFRunLoopRemoveSource(runLoop, AXObserverGetRunLoopSource(observer), .commonModes)
-                AXObserverRemoveNotification(observer, application, kAXFocusedWindowChangedNotification as CFString)
-            }
+    static func observeActivation(in notificationCenter: NotificationCenter,
+                                  handler: @escaping @Sendable (pid_t?) -> Void) -> FocusObservation {
+        let observer = notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: nil
+        ) { notification in
+            let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            handler(application?.processIdentifier)
         }
+        return FocusObservation { notificationCenter.removeObserver(observer) }
     }
-}
-
-private final class FocusWindowCallback {
-    let handler: (AXUIElement) -> Void
-
-    init(handler: @escaping (AXUIElement) -> Void) { self.handler = handler }
 }

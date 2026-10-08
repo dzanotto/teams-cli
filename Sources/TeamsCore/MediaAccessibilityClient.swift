@@ -20,6 +20,11 @@ protocol MediaAccessibilityClient {
 
 struct SystemMediaAccessibilityClient: MediaAccessibilityClient {
     private let reader = TeamsAccessibilityReader()
+    private let environment: MediaAccessibilityEnvironment
+
+    init(environment: MediaAccessibilityEnvironment = .live) {
+        self.environment = environment
+    }
 
     var uptime: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
@@ -28,26 +33,26 @@ struct SystemMediaAccessibilityClient: MediaAccessibilityClient {
     }
 
     func generation(of application: NSRunningApplication) -> MediaProcessGeneration? {
-        guard let launched = application.launchDate else { return nil }
+        guard let launched = environment.launchDate(application) else { return nil }
         return MediaProcessGeneration(pid: application.processIdentifier, launched: launched)
     }
 
     func processMatches(pid: pid_t, launched: Date) -> Bool {
-        guard let application = NSRunningApplication(processIdentifier: pid) else { return false }
-        return !application.isTerminated && application.launchDate == launched
+        guard let application = environment.runningApplication(pid) else { return false }
+        return !environment.isTerminated(application) && environment.launchDate(application) == launched
     }
 
     func canPress(_ element: AXUIElement) -> Bool {
         guard value(element, kAXEnabledAttribute) as? Bool == true else { return false }
-        var actions: CFArray?
-        return AXUIElementCopyActionNames(element, &actions) == .success &&
+        let (actions, error) = environment.copyActionNames(element)
+        return error == .success &&
             (actions as? [String] ?? []).contains(kAXPressAction)
     }
 
     func value(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
-        AXUIElementSetMessagingTimeout(element, 0.25)
-        var result: CFTypeRef?
-        return AXUIElementCopyAttributeValue(element, name as CFString, &result) == .success ? result : nil
+        environment.setMessagingTimeout(element, 0.25)
+        let (result, error) = environment.copyAttribute(element, name)
+        return error == .success ? result : nil
     }
 
     func press(_ element: AXUIElement) -> AXError {
