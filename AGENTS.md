@@ -24,7 +24,7 @@ Follow existing Swift style: four-space indentation, same-line opening braces, `
 
 ## Testing Guidelines
 
-Use XCTest classes named `<Feature>Tests` and descriptive `test...` methods. Exercise behavior through fake backends and virtual time where appropriate. Cover state transitions, no-ops, held/ambiguous calls, incomplete reads, target replacement, focus changes, timeouts, and uncertain outcomes. No numeric coverage threshold is configured. Run `swift test` and a release build for code changes; distinguish automated evidence from live validation.
+Use XCTest classes named `<Feature>Tests` and descriptive `test...` methods. Exercise behavior through fake backends and virtual time where appropriate. Cover state transitions, no-ops, held/ambiguous calls, incomplete reads, target replacement, focus changes, timeouts, and uncertain outcomes. Coverage should be above 80%. Run `swift test` and a release build for code changes; distinguish automated evidence from live validation.
 
 ## Commit & Pull Request Guidelines
 
