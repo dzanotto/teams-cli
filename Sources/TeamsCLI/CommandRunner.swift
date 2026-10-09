@@ -3,9 +3,11 @@ import TeamsCore
 
 private let usage = """
 Usage: teams-cli mic status [--json] [--window N]
-       teams-cli mic <mute|unmute|toggle> [--json]
+       teams-cli mic <mute|unmute> [--json]
+       teams-cli mic toggle [--json] [--timings]
        teams-cli camera status [--json] [--window N]
-       teams-cli camera <on|off|toggle> [--json]
+       teams-cli camera <on|off> [--json]
+       teams-cli camera toggle [--json] [--timings]
        teams-cli hand status [--json] [--window N]
        teams-cli hand <raise|lower|toggle> [--json]
        teams-cli call end [--json]
@@ -23,6 +25,7 @@ Calls on hold are excluded, including when selected with --window.
 Never explicitly activates Teams, sends keys, or shows permission dialogs.
 
   --json       Print machine-readable status and per-window results.
+  --timings    Mic/camera toggle only: emit a JSON timing record on stderr.
   --window N   Status only: inspect a window using its 1-based index from --json.
   -h, --help   Show this help, also after a command group or full command.
   --version    Show the build version; use on its own without other arguments.
@@ -40,6 +43,7 @@ private struct Options {
     let media: MediaCommand
     let operation: Operation
     var json = false
+    var timings = false
     var window: Int?
 
     init(_ arguments: [String]) throws {
@@ -59,6 +63,11 @@ private struct Options {
             case "--json":
                 guard !json else { throw UsageError.invalid }
                 json = true
+            case "--timings":
+                guard !timings, operation == .toggle, media == .mic || media == .camera else {
+                    throw UsageError.invalid
+                }
+                timings = true
             case "--window":
                 guard window == nil, index + 1 < arguments.count,
                       let number = Int(arguments[index + 1]), number > 0 else { throw UsageError.invalid }
@@ -127,7 +136,11 @@ struct CommandRunner {
     let writeStdout: (String) -> Void
     let writeStderr: (String) -> Void
 
-    func run(_ arguments: [String]) -> Int32 {
+    var timingClock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    var writeTimings: ((String) throws -> Void)? = nil
+
+    func run(_ arguments: [String], startedAt: TimeInterval? = nil) -> Int32 {
+        let timingStart = arguments.contains("--timings") ? (startedAt ?? timingClock()) : nil
         if arguments == ["--version"] {
             writeStdout("teams-cli \(BuildVersion.value)\n")
             return 0
@@ -145,12 +158,22 @@ struct CommandRunner {
         do { options = try Options(arguments) }
         catch { stderr(usage); return 64 }
 
+        let timings = options.timings ? CommandTimings(startedAt: timingStart, clock: timingClock) : nil
+        let code = execute(options, timings: timings)
+        // Commands have returned through every cleanup defer, and normal output is complete.
+        // Diagnostics must not change the action result, including if the sink fails.
+        try? timings?.emit(command: "\(options.media.rawValue) \(options.operation.rawValue)", exitCode: code,
+                           write: writeTimings ?? writeStderr)
+        return code
+    }
+
+    private func execute(_ options: Options, timings: CommandTimings?) -> Int32 {
         do {
             if options.operation != .status {
                 let output: Output
                 switch options.media {
                 case .mic:
-                    let result = try options.operation == .toggle ? handlers.toggleMicrophone() :
+                    let result = try options.operation == .toggle ? handlers.toggleMicrophone(timings) :
                         handlers.setMicrophone(options.operation == .mute ? .muted : .unmuted)
                     output = Output(media: .mic, state: result.state.rawValue, reason: result.reason,
                                     windows: result.windows.map { WindowOutput(window: $0.window, state: $0.state.rawValue) },
@@ -158,7 +181,7 @@ struct CommandRunner {
                                     action: options.operation.rawValue, changed: result.changed,
                                     actionAttempted: result.actionAttempted, success: result.success)
                 case .camera:
-                    let result = try options.operation == .toggle ? handlers.toggleCamera() :
+                    let result = try options.operation == .toggle ? handlers.toggleCamera(timings) :
                         handlers.setCamera(options.operation == .on ? .on : .off)
                     output = Output(media: .camera, state: result.state.rawValue, reason: result.reason,
                                     windows: result.windows.map { WindowOutput(window: $0.window, state: $0.state.rawValue) },
@@ -181,7 +204,7 @@ struct CommandRunner {
                                     action: options.operation.rawValue, changed: result.changed,
                                     actionAttempted: result.actionAttempted, success: result.success)
                 }
-                return emit(output, json: options.json) ?? (output.success == true ? 0 : 6)
+                return emit(output, json: options.json, timings: timings) ?? (output.success == true ? 0 : 6)
             }
             let control: MediaControl
             switch options.media {
@@ -194,7 +217,7 @@ struct CommandRunner {
             let windows = options.window.map { selected in snapshot.windows.filter { $0.index == selected } } ?? snapshot.windows
             if options.window != nil && windows.isEmpty {
                 return emit(Output(media: options.media, state: "unknown", reason: "window_not_found", windows: [],
-                                   focusUnchanged: snapshot.focusUnchanged), json: options.json) ?? 2
+                                   focusUnchanged: snapshot.focusUnchanged), json: options.json, timings: timings) ?? 2
             }
             let output: Output
             switch options.media {
@@ -216,7 +239,7 @@ struct CommandRunner {
                                 windows: assessment.windows.map { WindowOutput(window: $0.window, state: $0.state.rawValue) },
                                 focusUnchanged: snapshot.focusUnchanged, excludedWindows: assessment.excludedWindows)
             }
-            return emit(output, json: options.json) ??
+            return emit(output, json: options.json, timings: timings) ??
                 (["muted", "unmuted", "on", "off", "raised", "lowered"].contains(output.state) ? 0 : 2)
         } catch {
             if error is UsageError { stderr(usage); return 64 }
@@ -264,7 +287,7 @@ struct CommandRunner {
                 output.changed = false
                 output.success = false
             }
-            if let failure = emit(output, json: options.json) { return failure }
+            if let failure = emit(output, json: options.json, timings: timings) { return failure }
             if !options.json && code == 3 {
                 stderr("Enable Accessibility for the terminal or launcher running this command in System Settings > Privacy & Security > Accessibility, then retry. See README.md for setup.")
             }
@@ -277,7 +300,13 @@ struct CommandRunner {
     }
 
     /// Returns an exit code only when output encoding failed.
-    private func emit(_ output: Output, json: Bool) -> Int32? {
+    private func emit(_ output: Output, json: Bool, timings: CommandTimings?) -> Int32? {
+        timings?.recordOutcome(state: output.state, reason: output.reason, success: output.success,
+                               attempted: output.actionAttempted, changed: output.changed)
+        return timings.measure("result_output") { emitResult(output, json: json) }
+    }
+
+    private func emitResult(_ output: Output, json: Bool) -> Int32? {
         if json {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

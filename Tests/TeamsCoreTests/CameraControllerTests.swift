@@ -70,11 +70,11 @@ final class CameraControllerTests: XCTestCase {
         for observations in [
             [observed(.off)],
             [observed(.off), observed(.off), observed(.on, ready: false)],
-            Array(repeating: observed(.off), count: 21) + [observed(.on)],
+            Array(repeating: observed(.off), count: 160) + [observed(.on)],
         ] {
             let backend = FakeCameraBackend(observations)
             assertUncertain(try CameraController(backend: backend).toggle(), reason: "verification_timeout")
-            XCTAssertEqual(backend.waitCount, 20)
+            XCTAssertEqual(backend.waitCount, 160)
             XCTAssertEqual(backend.presses.count, 1)
         }
     }
@@ -241,19 +241,19 @@ final class CameraControllerTests: XCTestCase {
     func testPermanentDisabledDesiredStateIsUncertainAndNeverRetried() throws {
         let backend = FakeCameraBackend([observed(.off), observed(.off), observed(.on, ready: false)])
         assertUncertain(try CameraController(backend: backend).set(.on), reason: "verification_timeout")
-        XCTAssertEqual(backend.waitCount, 20)
-        XCTAssertEqual(backend.sampleCount, 22)
+        XCTAssertEqual(backend.waitCount, 160)
+        XCTAssertEqual(backend.sampleCount, 161)
         XCTAssertEqual(backend.presses.count, 1)
     }
 
     func testUnchangedStateAndOneLateMatchCannotEstablishSuccess() throws {
         for observations in [
             [observed(.off)],
-            Array(repeating: observed(.off), count: 21) + [observed(.on)],
+            Array(repeating: observed(.off), count: 160) + [observed(.on)],
         ] {
             let backend = FakeCameraBackend(observations)
             assertUncertain(try CameraController(backend: backend).set(.on), reason: "verification_timeout")
-            XCTAssertEqual(backend.waitCount, 20)
+            XCTAssertEqual(backend.waitCount, 160)
             XCTAssertEqual(backend.presses.count, 1)
         }
     }
@@ -462,5 +462,6 @@ private final class FakeCameraBackend: CameraBackend {
         return focusValues[min(index, focusValues.count - 1)]
     }
 
+    var verificationTimeRemaining: TimeInterval { max(0, 8 - Double(waitCount) * 0.05) }
     func waitForUpdate() { waitCount += 1 }
 }

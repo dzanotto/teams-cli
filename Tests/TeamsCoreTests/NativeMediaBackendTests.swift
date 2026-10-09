@@ -400,5 +400,9 @@ private struct NativeMicrophoneTestAdapter: MicrophoneBackend {
     }
 
     func focusPreserved() -> Bool? { native.focusPreserved() }
-    func waitForUpdate() { client.waits += 1 }
+    var verificationTimeRemaining: TimeInterval { native.verificationTimeRemaining }
+    func waitForUpdate() {
+        client.waits += 1
+        client.uptime += min(0.05, verificationTimeRemaining)
+    }
 }

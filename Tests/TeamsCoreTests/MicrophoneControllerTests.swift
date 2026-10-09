@@ -145,7 +145,7 @@ final class MicrophoneControllerTests: XCTestCase {
         let timeout = FakeMicrophoneBackend([observed(.muted)])
         assertUncertain(try MicrophoneController(backend: timeout).toggle(), reason: "verification_timeout")
         XCTAssertEqual(timeout.presses.count, 1)
-        XCTAssertEqual(timeout.waitCount, 8)
+        XCTAssertEqual(timeout.waitCount, 160)
 
         let pressError = FakeMicrophoneBackend([observed(.muted)])
         pressError.throwOnPress = true
@@ -365,13 +365,13 @@ final class MicrophoneControllerTests: XCTestCase {
     func testVerificationTimeoutDoesNotRetryEvenIfStateStillAppearsUnchanged() throws {
         let backend = FakeMicrophoneBackend([observed(.unmuted)])
         assertUncertain(try MicrophoneController(backend: backend).set(.muted), reason: "verification_timeout")
-        XCTAssertEqual(backend.sampleCount, 10)
-        XCTAssertEqual(backend.waitCount, 8)
+        XCTAssertEqual(backend.sampleCount, 161)
+        XCTAssertEqual(backend.waitCount, 160)
         XCTAssertEqual(backend.presses.count, 1)
     }
 
     func testOneMatchingSampleAtDeadlineDoesNotEstablishSuccess() throws {
-        let backend = FakeMicrophoneBackend(Array(repeating: observed(.unmuted), count: 9) + [observed(.muted)])
+        let backend = FakeMicrophoneBackend(Array(repeating: observed(.unmuted), count: 160) + [observed(.muted)])
         assertUncertain(try MicrophoneController(backend: backend).set(.muted), reason: "verification_timeout")
         XCTAssertEqual(backend.presses.count, 1)
     }
@@ -499,5 +499,6 @@ private final class FakeMicrophoneBackend: MicrophoneBackend {
         return focusValues[min(index, focusValues.count - 1)]
     }
 
+    var verificationTimeRemaining: TimeInterval { max(0, 8 - Double(waitCount) * 0.05) }
     func waitForUpdate() { waitCount += 1 }
 }

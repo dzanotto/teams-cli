@@ -56,6 +56,10 @@ final class CLIStub {
                                focusUnchanged: true, windows: [], excludedWindows: [], success: true)
     var call = CallEndResult(state: .ended, reason: nil, changed: true, actionAttempted: true,
                             focusUnchanged: true, windows: [], excludedWindows: [], success: true)
+    var timingClock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    var writeTimings: ((String) throws -> Void)?
+    var onStdout: (() -> Void)?
+    var onToggle: ((CommandTimings?) -> Void)?
     var error: Error?
     private(set) var calls: [String] = []
 
@@ -83,7 +87,8 @@ final class CLIStub {
     func run(_ arguments: [String]) -> CLIResult {
         var stdout = ""
         var stderr = ""
-        let runner = CommandRunner(handlers: handlers, writeStdout: { stdout += $0 }, writeStderr: { stderr += $0 })
+        let runner = CommandRunner(handlers: handlers, writeStdout: { stdout += $0; self.onStdout?() }, writeStderr: { stderr += $0 },
+                                   timingClock: timingClock, writeTimings: writeTimings)
         let code = runner.run(arguments)
         return CLIResult(code: code, stdout: stdout, stderr: stderr)
     }
@@ -100,13 +105,15 @@ final class CLIStub {
         }, setMicrophone: {
             try self.record("mic:\($0.rawValue)")
             return self.microphone
-        }, toggleMicrophone: {
+        }, toggleMicrophone: { timings in
+            self.onToggle?(timings)
             try self.record("mic:toggle")
             return self.microphone
         }, setCamera: {
             try self.record("camera:\($0.rawValue)")
             return self.camera
-        }, toggleCamera: {
+        }, toggleCamera: { timings in
+            self.onToggle?(timings)
             try self.record("camera:toggle")
             return self.camera
         }, setHand: {

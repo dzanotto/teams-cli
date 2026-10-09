@@ -19,10 +19,11 @@ protocol MediaAccessibilityClient {
 }
 
 struct SystemMediaAccessibilityClient: MediaAccessibilityClient {
-    private let reader = TeamsAccessibilityReader()
+    private let reader: TeamsAccessibilityReader
     private let environment: MediaAccessibilityEnvironment
 
-    init(environment: MediaAccessibilityEnvironment = .live) {
+    init(environment: MediaAccessibilityEnvironment = .live, timings: CommandTimings? = nil) {
+        reader = TeamsAccessibilityReader(environment: .live, timings: timings)
         self.environment = environment
     }
 

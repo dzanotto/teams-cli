@@ -4,13 +4,18 @@ import Foundation
 struct MediaActionEnvironment<Focus: MediaCommandFocus> {
     let lifecycle: MediaCommandEnvironment<Focus>
     let makeAccessibility: () -> any MediaAccessibilityClient
-    let waitForUpdate: () -> Void
+    let wait: (TimeInterval) -> Void
+
+    // Hand and call-end retain their existing cadence and sample limits.
+    var waitForUpdate: () -> Void { { wait(0.15) } }
 }
 
 extension MediaActionEnvironment where Focus == FocusMonitor {
-    static var live: Self {
-        Self(lifecycle: .live, makeAccessibility: { SystemMediaAccessibilityClient() }, waitForUpdate: {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+    static var live: Self { recordingTimings(nil) }
+
+    static func recordingTimings(_ timings: CommandTimings?) -> Self {
+        Self(lifecycle: .live, makeAccessibility: { SystemMediaAccessibilityClient(timings: timings) }, wait: {
+            RunLoop.current.run(until: Date().addingTimeInterval($0))
         })
     }
 }

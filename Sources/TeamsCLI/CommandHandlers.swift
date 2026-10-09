@@ -4,9 +4,9 @@ import TeamsCore
 struct CommandHandlers {
     let readStatus: (MediaControl) throws -> TeamsSnapshot
     let setMicrophone: (MicrophoneTarget) throws -> MicrophoneActionResult
-    let toggleMicrophone: () throws -> MicrophoneActionResult
+    let toggleMicrophone: (CommandTimings?) throws -> MicrophoneActionResult
     let setCamera: (CameraTarget) throws -> CameraActionResult
-    let toggleCamera: () throws -> CameraActionResult
+    let toggleCamera: (CommandTimings?) throws -> CameraActionResult
     let setHand: (HandTarget) throws -> HandActionResult
     let toggleHand: () throws -> HandActionResult
     let endCall: () throws -> CallEndResult

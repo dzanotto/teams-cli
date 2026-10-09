@@ -35,9 +35,10 @@ enum TeamsMediaCommandSupport {
     static func perform<Result, Focus: MediaCommandFocus>(
         _ operation: (Focus) throws -> Result,
         environment: MediaCommandEnvironment<Focus>,
+        timings: CommandTimings? = nil,
         onFinalizationFailure: (Result, String, Bool?) -> Result
     ) throws -> Result {
-        try perform(operation, environment: environment, onFinalization: { result, restored, focus in
+        try perform(operation, environment: environment, timings: timings, onFinalization: { result, restored, focus in
             guard restored, focus == true else {
                 let focusReason = focus == nil ? "focus_unavailable" : "focus_changed"
                 let reason = !restored ? "accessibility_cleanup_failed" : focusReason
@@ -58,20 +59,21 @@ enum TeamsMediaCommandSupport {
     static func perform<Result, Focus: MediaCommandFocus>(
         _ operation: (Focus) throws -> Result,
         environment: MediaCommandEnvironment<Focus>,
+        timings: CommandTimings? = nil,
         onFinalization: (Result, Bool, Bool?) -> Result
     ) throws -> Result {
         guard environment.isTrusted() else { throw TeamsReadError.accessibilityDenied }
-        let commandLock = try environment.acquireLock()
-        defer { commandLock.release() }
-        let focus = environment.makeFocus()
-        defer { focus.stop() }
+        let commandLock = try timings.measure("lock_acquire", environment.acquireLock)
+        defer { timings.measure("lock_release", commandLock.release) }
+        let focus = timings.measure("focus_start", environment.makeFocus)
+        defer { timings.measure("focus_stop", focus.stop) }
         let exposure: TeamsAccessibilityExposure
         do {
-            exposure = try environment.makeExposure()
+            exposure = try timings.measure("accessibility_setup", environment.makeExposure)
         } catch {
             // Initialization finalizes any setup cleanup before throwing. Drain focus
             // observations while monitoring is still alive; no cleanup writes follow.
-            _ = focus.preserved()
+            _ = timings.measure("focus_check", focus.preserved)
             throw error
         }
         // restore() caches both success and failure. Explicit finalization below
@@ -81,13 +83,13 @@ enum TeamsMediaCommandSupport {
         do {
             result = try operation(focus)
         } catch {
-            let restored = exposure.restore()
-            _ = focus.preserved()
+            let restored = timings.measure("accessibility_cleanup", exposure.restore)
+            _ = timings.measure("focus_check", focus.preserved)
             guard restored else { throw MicrophoneCommandError.accessibilityCleanupFailed }
             throw error
         }
-        let restored = exposure.restore()
-        let finalFocus = focus.preserved()
+        let restored = timings.measure("accessibility_cleanup", exposure.restore)
+        let finalFocus = timings.measure("focus_check", focus.preserved)
         return onFinalization(result, restored, finalFocus)
     }
 }
@@ -145,6 +147,7 @@ final class NativeMediaBackend<Assessment, State: Equatable> {
     private let classify: ([WindowSnapshot], Bool) -> Assessment
     private let select: (Assessment) -> MediaSelection<State>?
     private let stateChangedReason: String
+    private let timings: CommandTimings?
     private let deadline: TimeInterval
     private var target: MediaTargetHandle?
     /// Only the latest successful sample can authorize one dispatch attempt.
@@ -154,7 +157,9 @@ final class NativeMediaBackend<Assessment, State: Equatable> {
     init(control: MediaControl, accessibility: any MediaAccessibilityClient,
          checkFocus: @escaping () -> Bool?, stateChangedReason: String,
          classify: @escaping ([WindowSnapshot], Bool) -> Assessment,
+         timings: CommandTimings? = nil,
          select: @escaping (Assessment) -> MediaSelection<State>?) {
+        self.timings = timings
         self.accessibility = accessibility
         self.control = control
         self.checkFocus = checkFocus
@@ -164,11 +169,17 @@ final class NativeMediaBackend<Assessment, State: Equatable> {
         deadline = accessibility.uptime + 8
     }
 
+    var verificationTimeRemaining: TimeInterval { max(0, deadline - accessibility.uptime) }
+
     func sample() throws -> NativeMediaObservation<Assessment> {
         preflight = nil
         let remaining = deadline - accessibility.uptime
         guard remaining > 0 else { throw AccessibilityActionError.timedOut }
-        let snapshot = try accessibility.read(control: control, timeout: min(1.5, remaining))
+        let snapshot = try timings.measure("accessibility_read") {
+            let snapshot = try accessibility.read(control: control, timeout: min(1.5, remaining))
+            timings?.detail("complete", String(snapshot.complete))
+            return snapshot
+        }
         let assessment = classify(snapshot.windows, snapshot.complete)
         guard let selected = select(assessment),
               let handles = snapshot.handles[selected.window],
@@ -194,44 +205,49 @@ final class NativeMediaBackend<Assessment, State: Equatable> {
     }
 
     func press(targetID: String, expectedState: State) throws {
-        // The controller has just rescanned eligibility, hold exclusions and identity.
-        // Consume that evidence once instead of repeating the full tree traversal.
-        // Direct state, process, readiness and focus checks below remain fresh.
-        let prepared = preflight
-        preflight = nil
-        guard let fresh = prepared else { throw MediaPressRejected(reason: "preflight_failed") }
-        guard fresh.targetID == targetID, let target,
-              accessibility.processMatches(pid: target.pid, launched: target.launched) else {
-            throw MediaPressRejected(reason: "target_changed")
-        }
-        guard select(fresh.assessment)?.state == expectedState else {
-            throw MediaPressRejected(reason: stateChangedReason)
-        }
-        guard fresh.canPress else { throw MediaPressRejected(reason: "control_unavailable") }
+        let button = try timings.measure("dispatch_validation") {
+            // The controller has just rescanned eligibility, hold exclusions and identity.
+            // Consume that evidence once instead of repeating the full tree traversal.
+            // Direct state, process, readiness and focus checks below remain fresh.
+            let prepared = preflight
+            preflight = nil
+            guard let fresh = prepared else { throw MediaPressRejected(reason: "preflight_failed") }
+            guard fresh.targetID == targetID, let target,
+                  accessibility.processMatches(pid: target.pid, launched: target.launched) else {
+                throw MediaPressRejected(reason: "target_changed")
+            }
+            guard select(fresh.assessment)?.state == expectedState else {
+                throw MediaPressRejected(reason: stateChangedReason)
+            }
+            guard fresh.canPress else { throw MediaPressRejected(reason: "control_unavailable") }
 
-        let button = MediaButtonSnapshot.read(control: control) { accessibility.value(target.button, $0) }
-        // The consumed full scan established call eligibility. This synthetic hangup
-        // permits the classifier to validate the freshly read button and state indicator.
-        var controls = [
-            button, ControlSnapshot(role: "AXButton", identifier: "hangup-button", label: "")
-        ]
-        if control == .hand, let ownVideo = target.ownVideo {
-            controls.append(OwnVideoHandIndicator.read { accessibility.value(ownVideo, $0) })
+            let button = MediaButtonSnapshot.read(control: control) { accessibility.value(target.button, $0) }
+            // The consumed full scan established call eligibility. This synthetic hangup
+            // permits the classifier to validate the freshly read button and state indicator.
+            var controls = [
+                button, ControlSnapshot(role: "AXButton", identifier: "hangup-button", label: "")
+            ]
+            if control == .hand, let ownVideo = target.ownVideo {
+                controls.append(OwnVideoHandIndicator.read { accessibility.value(ownVideo, $0) })
+            }
+            let check = classify([WindowSnapshot(index: 1, controls: controls)], true)
+            guard select(check)?.state == expectedState else {
+                throw MediaPressRejected(reason: stateChangedReason)
+            }
+            guard accessibility.processMatches(pid: target.pid, launched: target.launched) else {
+                throw MediaPressRejected(reason: "target_changed")
+            }
+            guard accessibility.canPress(target.button) else { throw MediaPressRejected(reason: "control_unavailable") }
+            guard let preserved = timings.measure("focus_check", checkFocus) else {
+                throw MediaPressRejected(reason: "focus_unavailable")
+            }
+            guard preserved else { throw MediaPressRejected(reason: "focus_changed") }
+            guard accessibility.uptime < deadline else {
+                throw MediaPressRejected(reason: "preflight_failed")
+            }
+            return target.button
         }
-        let check = classify([WindowSnapshot(index: 1, controls: controls)], true)
-        guard select(check)?.state == expectedState else {
-            throw MediaPressRejected(reason: stateChangedReason)
-        }
-        guard accessibility.processMatches(pid: target.pid, launched: target.launched) else {
-            throw MediaPressRejected(reason: "target_changed")
-        }
-        guard accessibility.canPress(target.button) else { throw MediaPressRejected(reason: "control_unavailable") }
-        guard let preserved = checkFocus() else { throw MediaPressRejected(reason: "focus_unavailable") }
-        guard preserved else { throw MediaPressRejected(reason: "focus_changed") }
-        guard accessibility.uptime < deadline else {
-            throw MediaPressRejected(reason: "preflight_failed")
-        }
-        let error = accessibility.press(target.button)
+        let error = timings.measure("ax_press") { accessibility.press(button) }
         guard error == .success else { throw AccessibilityActionError.pressFailed(error.rawValue) }
     }
 

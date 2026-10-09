@@ -27,6 +27,7 @@ struct MicrophoneObservation {
 }
 
 protocol MicrophoneBackend {
+    var verificationTimeRemaining: TimeInterval { get }
     func sample() throws -> MicrophoneObservation
     /// Consume the latest sample, then recheck live state, process and focus before pressing.
     func press(targetID: String, expectedState: MicrophoneState) throws
@@ -46,6 +47,7 @@ extension MicrophoneObservation: MediaObservation {
 /// Sets or inverts a known state through Teams' toggle control without retrying an action.
 struct MicrophoneController {
     let backend: any MicrophoneBackend
+    var timings: CommandTimings? = nil
 
     func set(_ target: MicrophoneTarget) throws -> MicrophoneActionResult {
         try perform { _ in target.state }
@@ -58,10 +60,11 @@ struct MicrophoneController {
     private func perform(targetFor resolveTarget: (MicrophoneState) -> MicrophoneState) throws -> MicrophoneActionResult {
         let controller = MediaActionController(
             unknownState: MicrophoneState.unknown, knownStates: [.muted, .unmuted],
-            stateUnavailableReason: "microphone_state_unavailable", verificationSamples: 8,
+            stateUnavailableReason: "microphone_state_unavailable",
+            verificationLimit: .timeRemaining { backend.verificationTimeRemaining },
             requiresReadyControlToConfirm: false, sample: backend.sample,
             press: backend.press, focusPreserved: backend.focusPreserved,
-            waitForUpdate: backend.waitForUpdate)
+            waitForUpdate: backend.waitForUpdate, timings: timings)
         let result = try controller.perform(targetFor: resolveTarget)
         return MicrophoneActionResult(state: result.state, reason: result.reason,
                                       changed: result.changed, actionAttempted: result.actionAttempted,

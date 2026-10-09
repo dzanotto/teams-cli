@@ -46,16 +46,32 @@ public final class TeamsAccessibilityReader {
     private let maxDepth = 80
     private let maxSeconds: TimeInterval = 8
     private let environment: AccessibilityReaderEnvironment
+    private let timings: CommandTimings?
 
     public convenience init() { self.init(environment: .live) }
 
-    init(environment: AccessibilityReaderEnvironment) { self.environment = environment }
+    init(environment: AccessibilityReaderEnvironment, timings: CommandTimings? = nil) {
+        self.environment = environment
+        self.timings = timings
+    }
 
     public func read(control: MediaControl = .microphone, timeout: TimeInterval = 8) throws -> TeamsSnapshot {
+        try timings.measure("discovery") {
+            timings?.increment("visited_nodes", by: 0)
+            timings?.increment("attribute_calls", by: 0)
+            timings?.increment("batch_attribute_calls", by: 0)
+            timings?.increment("scan_attempts", by: 0)
+            let snapshot = try discover(control: control, timeout: timeout)
+            timings?.detail("complete", String(snapshot.complete))
+            return snapshot
+        }
+    }
+
+    private func discover(control: MediaControl, timeout: TimeInterval) throws -> TeamsSnapshot {
         guard environment.isTrusted() else { throw TeamsReadError.accessibilityDenied }
         let apps = environment.runningApplications("com.microsoft.teams2")
         guard !apps.isEmpty else { throw TeamsReadError.notRunning }
-        let focusBefore = environment.captureFocus()
+        let focusBefore = timings.measure("reader_focus_check", environment.captureFocus)
         let deadline = environment.uptime() + min(maxSeconds, max(0, timeout))
 
         // Chromium enables its native accessibility tree when the browser app's role is read.
@@ -64,6 +80,7 @@ public final class TeamsAccessibilityReader {
         for helper in environment.runningApplications("com.microsoft.teams2.helper") {
             guard helper.executableName == "Microsoft Teams WebView" else { continue }
             environment.setMessagingTimeout(helper.element, 0.25)
+            timings?.increment("attribute_calls")
             _ = environment.copyAttribute(helper.element, kAXRoleAttribute)
         }
 
@@ -73,14 +90,16 @@ public final class TeamsAccessibilityReader {
         if environment.uptime() + 0.25 < deadline && result.complete && !result.windows.contains(where: { window in
             window.controls.contains(where: { $0.identifier == control.rawValue })
         }) {
-            environment.sleep(0.25)
+            timings.measure("discovery_retry_wait") { environment.sleep(0.25) }
             result = try scan(apps, control: control, deadline: deadline)
         }
         return TeamsSnapshot(windows: result.windows, complete: result.complete,
-                             focusUnchanged: focusBefore.matches(environment.captureFocus()), handles: result.handles)
+                             focusUnchanged: focusBefore.matches(timings.measure("reader_focus_check", environment.captureFocus)),
+                             handles: result.handles)
     }
 
     private func scan(_ apps: [AccessibilityReaderApplication], control: MediaControl, deadline: TimeInterval) throws -> TeamsSnapshot {
+        timings?.increment("scan_attempts")
         var visited = Set<AXUIElement>()
         var scheduled = Set<AXUIElement>()
         var complete = true
@@ -90,6 +109,7 @@ public final class TeamsAccessibilityReader {
         for app in apps {
             let root = app.element
             environment.setMessagingTimeout(root, 0.25)
+            timings?.increment("attribute_calls")
             let (rawWindows, error) = environment.copyAttribute(root, kAXWindowsAttribute)
             guard error == .success, let windows = rawWindows as? [AXUIElement] else {
                 throw TeamsReadError.accessibilityFailure(error.rawValue)
@@ -110,6 +130,7 @@ public final class TeamsAccessibilityReader {
                     let (node, depth) = queue[cursor]
                     cursor += 1
                     guard visited.insert(node).inserted else { continue }
+                    timings?.increment("visited_nodes")
                     environment.setMessagingTimeout(node, 0.25)
                     let fields = attributes(node, [kAXRoleAttribute, kAXChildrenAttribute])
                     if fields.failed { complete = false }
@@ -164,6 +185,8 @@ public final class TeamsAccessibilityReader {
     }
 
     private func attributes(_ element: AXUIElement, _ names: [String]) -> AttributeValues {
+        timings?.increment("attribute_calls")
+        timings?.increment("batch_attribute_calls")
         let (raw, error) = environment.copyAttributes(element, names)
         guard error == .success, let array = raw as? [Any], array.count == names.count else {
             return AttributeValues(values: Array(repeating: nil, count: names.count), failed: true)

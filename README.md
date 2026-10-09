@@ -83,6 +83,7 @@ not request administrator privileges, microphone access, or screen recording.
 ## Command reference
 
 All Teams commands below support `--json`. Only status commands support `--window N`.
+Microphone and camera toggles also support [`--timings`](#timing-diagnostics).
 
 | Command | Behavior |
 | --- | --- |
@@ -168,6 +169,20 @@ missing focus evidence or an observed change causes refusal before dispatch or
 an unverified result afterward. Monitoring is best effort and cannot guarantee
 that a Teams version will never shift focus during a press.
 
+Microphone and camera actions wait 50 ms before each verification read, capped by
+the remaining eight-second sampling budget. Both initial discovery reads,
+dispatch, waits, and verification share that deadline; verification does not start
+a new budget after pressing. Success still requires two consecutive complete
+observations, and camera observations must also report a ready control. Reads
+returning at or after the deadline cannot confirm success. Hand and call-end
+retain their existing 150 ms waits and sample limits.
+
+The microphone and camera deadline replaces the former limits of eight and twenty
+verification samples. This gives slow transitions time to settle with the faster
+polling cadence, but an unchanged control can take longer to report a verification
+timeout. Setup, cleanup, and in-flight Accessibility calls can still add overhead
+beyond the sampling budget.
+
 Fresh checks and locking reduce races, but another user or controller can still
 change Teams between a check and a press. Reused Accessibility objects also cannot
 prove a meeting's identity.
@@ -239,6 +254,60 @@ not a definitive overall status.
 | 5 | `unknown` | Accessibility communication failed |
 | 6 | `unknown` / `ambiguous` | Action refused, busy, or outcome/focus not verified |
 | 64 | Usage on stderr | Invalid command or options |
+
+## Timing diagnostics
+
+Add `--timings` to a microphone or camera toggle to collect a buffered timing trace:
+
+```sh
+.build/release/teams-cli mic toggle --json --timings
+.build/release/teams-cli camera toggle --json --timings
+```
+
+These commands perform real toggles. The flag measures the normal action; it is
+not a dry run. Use the release build when investigating latency. No polling,
+timeouts, verification requirements, or focus rules change when tracing is enabled.
+
+Normal stdout and exit codes are unchanged. After cleanup, focus monitoring
+shutdown, lock release, and normal result output, the CLI writes one compact JSON
+record to stderr. Existing stderr errors may precede it on separate lines. Hand,
+status, desired-state, and call-end commands do not accept `--timings`.
+
+The record has `type: "timings"`, `schema_version: 1`, `command`, `exit_code`,
+`elapsed_ms`, `outcome`, and `spans`. Outcome fields contain the available state,
+reason, success, action-attempted, and changed values; unavailable values are omitted.
+Each span has an `id`, optional `parent_id`, `name`, `start_ms`, `duration_ms`,
+`threw`, `counters`, and `details`. IDs and offsets follow span start order.
+Durations include child spans: **do not sum parents and their children**.
+`threw` means that the measured operation threw an error, not that every returned
+failure has that flag; use the command outcome to determine success.
+
+The trace separates lock acquisition/release, focus checks and monitoring,
+Accessibility setup/cleanup, initial/preflight observations, dispatch validation,
+AXPress, every verification wait/observation, and result output. Observation details
+include state and `can_press`, so a camera label change can be distinguished from
+the control becoming ready. `accessibility_read` includes discovery; its nested
+`discovery` span includes reader focus checks and any retry wait. Discovery counters
+report visited nodes across scan attempts, total attribute calls (including batch
+calls), batch attribute calls, and scan attempts. These counters cover discovery
+requests, excluding focus snapshots and direct dispatch/readiness checks. Successful
+reads report completeness; thrown reads retain partial counters. Setup failure
+recovery is included in the setup span. No labels, titles, or participant data are
+recorded.
+
+Timing uses a monotonic clock. `elapsed_ms` starts at the CLI's first timestamp,
+after collecting raw arguments and detecting the flag, and ends after normal
+result output and command finalization. It excludes process startup before that
+timestamp, trace serialization/writing, and process teardown. Measure launch-to-exit
+time externally when those costs matter. Spans do not partition the entire elapsed
+time; uninstrumented work and recorder overhead occupy the gaps. Instrumentation
+adds overhead, so compare traced stage timings with separate untraced total timings.
+Without the flag, no recorder is allocated and no diagnostic clock is read.
+
+Handled failures produce partial traces. A diagnostic write failure does not change
+the action result or trigger another action. Automated fake-backend tests validate
+timing accounting and behavior preservation; live latency measurements are separate
+evidence.
 
 ## Compatibility and limitations
 

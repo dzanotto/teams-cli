@@ -39,7 +39,7 @@ enum CommandUnderTest: CaseIterable {
     }
 
     /// A nil target invokes toggle. Concrete types keep every production adapter in the path.
-    func run(_ harness: MediaCommandHarness, target: Bool? = nil) throws -> CommandTestResult {
+    func run(_ harness: MediaCommandHarness, target: Bool? = nil, timings: CommandTimings? = nil) throws -> CommandTestResult {
         let environment = harness.environment
         switch self {
         case .microphone:
@@ -47,7 +47,7 @@ enum CommandUnderTest: CaseIterable {
             if let target {
                 result = try TeamsMicrophoneCommands.set(target ? .unmuted : .muted, environment: environment)
             } else {
-                result = try TeamsMicrophoneCommands.toggle(environment: environment)
+                result = try TeamsMicrophoneCommands.toggle(environment: environment, timings: timings)
             }
             return CommandTestResult(state: result.state.rawValue, reason: result.reason, changed: result.changed,
                                      attempted: result.actionAttempted, focus: result.focusUnchanged,
@@ -58,7 +58,7 @@ enum CommandUnderTest: CaseIterable {
             if let target {
                 result = try TeamsCameraCommands.set(target ? .on : .off, environment: environment)
             } else {
-                result = try TeamsCameraCommands.toggle(environment: environment)
+                result = try TeamsCameraCommands.toggle(environment: environment, timings: timings)
             }
             return CommandTestResult(state: result.state.rawValue, reason: result.reason, changed: result.changed,
                                      attempted: result.actionAttempted, focus: result.focusUnchanged,
@@ -183,6 +183,8 @@ final class MediaCommandHarness {
     let lifecycle: CommandLifecycleHarness
     let accessibility: CommandAccessibilityStub
     private(set) var waits = 0
+    private(set) var waitDurations: [TimeInterval] = []
+    var onWait: ((TimeInterval) -> Void)?
 
     init(_ frames: [CommandFrame]) throws {
         lifecycle = try CommandLifecycleHarness()
@@ -194,10 +196,12 @@ final class MediaCommandHarness {
         MediaActionEnvironment(lifecycle: lifecycle.environment, makeAccessibility: {
             self.lifecycle.events.append("backend")
             return self.accessibility
-        }, waitForUpdate: {
+        }, wait: { duration in
             self.lifecycle.events.append("wait")
             self.waits += 1
-            self.accessibility.uptime += 0.15
+            self.waitDurations.append(duration)
+            self.accessibility.uptime += duration
+            self.onWait?(duration)
         })
     }
 

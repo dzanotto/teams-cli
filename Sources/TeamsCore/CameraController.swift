@@ -27,6 +27,7 @@ struct CameraObservation {
 }
 
 protocol CameraBackend {
+    var verificationTimeRemaining: TimeInterval { get }
     func sample() throws -> CameraObservation
     /// Consume the latest sample, then recheck live state, process and focus before pressing.
     func press(targetID: String, expectedState: CameraState) throws
@@ -47,6 +48,7 @@ extension CameraObservation: MediaObservation {
 /// Confirm twice only after the desired state and a ready control are observed.
 struct CameraController {
     let backend: any CameraBackend
+    var timings: CommandTimings? = nil
 
     func set(_ target: CameraTarget) throws -> CameraActionResult {
         try perform { _ in target.state }
@@ -59,10 +61,11 @@ struct CameraController {
     private func perform(targetFor resolveTarget: (CameraState) -> CameraState) throws -> CameraActionResult {
         let controller = MediaActionController(
             unknownState: CameraState.unknown, knownStates: [.on, .off],
-            stateUnavailableReason: "camera_state_unavailable", verificationSamples: 20,
+            stateUnavailableReason: "camera_state_unavailable",
+            verificationLimit: .timeRemaining { backend.verificationTimeRemaining },
             requiresReadyControlToConfirm: true, sample: backend.sample,
             press: backend.press, focusPreserved: backend.focusPreserved,
-            waitForUpdate: backend.waitForUpdate)
+            waitForUpdate: backend.waitForUpdate, timings: timings)
         let result = try controller.perform(targetFor: resolveTarget)
         return CameraActionResult(state: result.state, reason: result.reason,
                                   changed: result.changed, actionAttempted: result.actionAttempted,

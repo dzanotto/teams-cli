@@ -14,6 +14,7 @@ final class CallEndCommandIntegrationTests: XCTestCase {
             XCTAssertEqual(harness.accessibility.reads.map(\.timeout), Array(repeating: 1.5, count: 5))
             XCTAssertEqual(Set(harness.accessibility.directReads), [leaveButton])
             XCTAssertEqual(harness.waits, 2)
+            XCTAssertEqual(harness.waitDurations, [0.15, 0.15])
             harness.assertFinalized()
         }
     }

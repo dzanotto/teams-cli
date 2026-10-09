@@ -25,17 +25,39 @@ struct MediaPressRejected: Error {
     let reason: String
 }
 
+enum MediaVerificationLimit {
+    case samples(Int)
+    case timeRemaining(() -> TimeInterval)
+
+    static let pollingInterval: TimeInterval = 0.05
+
+    func permitsSample(after count: Int) -> Bool {
+        switch self {
+        case .samples(let limit): return count < limit
+        case .timeRemaining(let remaining): return remaining() > 0
+        }
+    }
+
+    var expired: Bool {
+        switch self {
+        case .samples: return false
+        case .timeRemaining(let remaining): return remaining() <= 0
+        }
+    }
+}
+
 /// Shared safety rules for controls that offer a toggle rather than a desired-state API.
 struct MediaActionController<Observation: MediaObservation> {
     let unknownState: Observation.State
     let knownStates: [Observation.State]
     let stateUnavailableReason: String
-    let verificationSamples: Int
+    let verificationLimit: MediaVerificationLimit
     let requiresReadyControlToConfirm: Bool
     let sample: () throws -> Observation
     let press: (String, Observation.State) throws -> Void
     let focusPreserved: () -> Bool?
     let waitForUpdate: () -> Void
+    var timings: CommandTimings? = nil
     var retryIncompleteVerification = false
 
     func set(_ target: Observation.State) throws -> MediaActionOutcome<Observation> {
@@ -45,8 +67,8 @@ struct MediaActionController<Observation: MediaObservation> {
     /// Resolve the desired state once, from the first validated observation.
     /// Rechecks retain that target so a concurrent change cannot reverse the intent.
     func perform(targetFor resolveTarget: (Observation.State) -> Observation.State) throws -> MediaActionOutcome<Observation> {
-        var observation = try sample()
-        var focus = focusPreserved()
+        var observation = try observe("initial_observation")
+        var focus = timings.measure("focus_check", focusPreserved)
 
         func result(state: Observation.State, reason: String?, attempted: Bool = false,
                     changed: Bool? = false, success: Bool = false) -> MediaActionOutcome<Observation> {
@@ -69,8 +91,8 @@ struct MediaActionController<Observation: MediaObservation> {
 
         // This full scan also prepares the native backend's single-use dispatch
         // evidence. A replacement call must never inherit an action.
-        observation = try sample()
-        focus = focusPreserved()
+        observation = try observe("preflight_observation")
+        focus = timings.measure("focus_check", focusPreserved)
         if let reason = selectionFailure(observation) {
             return result(state: observation.state, reason: reason)
         }
@@ -90,30 +112,41 @@ struct MediaActionController<Observation: MediaObservation> {
         do {
             try press(targetID, observation.state)
         } catch let rejection as MediaPressRejected {
-            focus = focusPreserved()
+            focus = timings.measure("focus_check", focusPreserved)
             return result(state: unknownState, reason: rejection.reason)
         } catch {
-            focus = focusPreserved()
+            focus = timings.measure("focus_check", focusPreserved)
             return result(state: unknownState, reason: "action_outcome_unknown", attempted: true, changed: nil)
         }
-        focus = focusPreserved()
+        focus = timings.measure("focus_check", focusPreserved)
         if let reason = focusFailure(focus) {
             return result(state: unknownState, reason: reason, attempted: true, changed: nil)
         }
 
         var consecutiveMatches = 0
-        for _ in 0..<verificationSamples {
-            waitForUpdate()
+        var verificationSamples = 0
+        while verificationLimit.permitsSample(after: verificationSamples) {
+            timings.measure("verification_wait", waitForUpdate)
+            // A wait may consume the final budget or return late. Drain focus events,
+            // but never start another read once the command deadline has expired.
+            if verificationLimit.expired {
+                focus = timings.measure("focus_check", focusPreserved)
+                if let reason = focusFailure(focus) {
+                    return result(state: unknownState, reason: reason, attempted: true, changed: nil)
+                }
+                break
+            }
             do {
-                observation = try sample()
+                observation = try observe("verification_observation")
             } catch {
-                focus = focusPreserved()
+                focus = timings.measure("focus_check", focusPreserved)
                 return result(state: unknownState, reason: "action_outcome_unknown", attempted: true, changed: nil)
             }
-            focus = focusPreserved()
+            focus = timings.measure("focus_check", focusPreserved)
             if let reason = focusFailure(focus) {
                 return result(state: unknownState, reason: reason, attempted: true, changed: nil)
             }
+            verificationSamples += 1
             if let reason = selectionFailure(observation) {
                 if retryIncompleteVerification && reason == "inspection_incomplete" {
                     consecutiveMatches = 0
@@ -124,6 +157,9 @@ struct MediaActionController<Observation: MediaObservation> {
             guard observation.targetID == targetID else {
                 return result(state: unknownState, reason: "target_changed", attempted: true, changed: nil)
             }
+            // AX reads are synchronous and can return after their requested timeout.
+            // A late second match is not an in-budget confirmation.
+            if verificationLimit.expired { break }
             let settled = observation.state == target && (!requiresReadyControlToConfirm || observation.canPress)
             consecutiveMatches = settled ? consecutiveMatches + 1 : 0
             if consecutiveMatches == 2 {
@@ -132,6 +168,16 @@ struct MediaActionController<Observation: MediaObservation> {
         }
         let reason = observation.reason == "inspection_incomplete" ? "inspection_incomplete" : "verification_timeout"
         return result(state: unknownState, reason: reason, attempted: true, changed: nil)
+    }
+
+    private func observe(_ phase: String) throws -> Observation {
+        try timings.measure(phase) {
+            let observation = try sample()
+            timings?.detail("state", String(describing: observation.state))
+            timings?.detail("can_press", String(observation.canPress))
+            if let reason = observation.reason { timings?.detail("reason", reason) }
+            return observation
+        }
     }
 
     private func focusFailure(_ focus: Bool?) -> String? {

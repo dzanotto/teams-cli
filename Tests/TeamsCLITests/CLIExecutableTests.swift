@@ -23,7 +23,8 @@ final class CLIExecutableTests: XCTestCase {
     func testExecutableInvalidArgumentsReturn64WithUsageOnlyOnStderr() throws {
         for arguments in [[], ["call", "status"], ["mic", "status", "--json", "--json"],
                           ["hand", "toggle", "--window", "1"], ["--version", "--json"],
-                          ["mic", "toggle", "--version"], ["--version", "--help"]] {
+                          ["mic", "toggle", "--version"], ["--version", "--help"],
+                          ["mic", "status", "--timings"], ["camera", "toggle", "--timings", "--timings"]] {
             let actual = try launch(arguments)
             let expected = CLIStub().run(arguments)
             XCTAssertEqual(actual.code, 64)

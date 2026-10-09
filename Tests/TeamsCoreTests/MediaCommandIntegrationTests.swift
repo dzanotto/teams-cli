@@ -189,8 +189,15 @@ final class MediaCommandIntegrationTests: XCTestCase {
             let result = try command.run(harness)
             assertUncertain(result, reason: "verification_timeout")
             XCTAssertEqual(harness.accessibility.pressed, [command.button])
-            XCTAssertEqual(harness.waits, command == .camera ? 20 : 8)
-            XCTAssertEqual(harness.accessibility.reads.count, harness.waits + 2)
+            if command == .hand {
+                XCTAssertEqual(harness.waits, 8)
+                XCTAssertEqual(harness.accessibility.reads.count, harness.waits + 2)
+            } else {
+                XCTAssertEqual(harness.accessibility.uptime, 108, accuracy: 0.000_001)
+                XCTAssertGreaterThanOrEqual(harness.waits, 160)
+                XCTAssertLessThanOrEqual(harness.waits, 161)
+                XCTAssertEqual(harness.accessibility.reads.count, harness.waits + 1)
+            }
             harness.assertFinalized()
         }
     }

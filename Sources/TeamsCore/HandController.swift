@@ -51,7 +51,7 @@ struct HandController {
     private func perform(targetFor resolveTarget: (HandState) -> HandState) throws -> HandActionResult {
         let controller = MediaActionController(
             unknownState: HandState.unknown, knownStates: [.raised, .lowered],
-            stateUnavailableReason: "hand_state_unavailable", verificationSamples: 8,
+            stateUnavailableReason: "hand_state_unavailable", verificationLimit: .samples(8),
             requiresReadyControlToConfirm: false, sample: backend.sample,
             press: backend.press, focusPreserved: backend.focusPreserved,
             waitForUpdate: backend.waitForUpdate, retryIncompleteVerification: true)
