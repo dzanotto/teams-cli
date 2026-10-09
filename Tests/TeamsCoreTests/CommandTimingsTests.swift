@@ -40,10 +40,12 @@ final class CommandTimingsTests: XCTestCase {
         XCTAssertThrowsError(try timings.measure("throw") { throw Failure.expected }) { error in
             XCTAssertTrue(error is Failure)
         }
-        XCTAssertEqual(timings.measureAggregate("value") { 42 }, 42)
+        var recordedDurations: [Double] = []
+        XCTAssertEqual(timings.measureAggregate("value", record: { recordedDurations.append($0) }) { 42 }, 42)
         XCTAssertThrowsError(try timings.measureAggregate("throw") { throw Failure.expected }) { error in
             XCTAssertTrue(error is Failure)
         }
+        XCTAssertTrue(recordedDurations.isEmpty)
     }
 
     func testRepeatedMeasurementsAggregatePerParentIncludingFailedRequests() throws {

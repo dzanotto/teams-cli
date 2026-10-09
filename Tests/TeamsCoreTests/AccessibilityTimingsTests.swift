@@ -25,7 +25,7 @@ final class AccessibilityTimingsTests: XCTestCase {
         XCTAssertEqual(instrumented.messagingTimeouts.map(\.seconds), baseline.messagingTimeouts.map(\.seconds))
         let discovery = try XCTUnwrap(timings.spans.first { $0.name == "discovery" })
         XCTAssertEqual(discovery.counters, ["visited_nodes": 3, "attribute_calls": 9,
-                                            "batch_attribute_calls": 7, "scan_attempts": 1])
+                                            "batch_attribute_calls": 7, "scan_attempts": 1, "excluded_main_windows": 0])
         XCTAssertEqual(discovery.details["complete"], "true")
         XCTAssertEqual(discovery.durationMS, 70, accuracy: 0.0001)
         let nodes = try XCTUnwrap(discovery.aggregates["node_attributes"])
@@ -54,7 +54,7 @@ final class AccessibilityTimingsTests: XCTestCase {
         XCTAssertTrue(snapshot.complete)
         let discovery = try XCTUnwrap(timings.spans.first { $0.name == "discovery" })
         XCTAssertEqual(discovery.counters, ["visited_nodes": 2, "attribute_calls": 4,
-                                            "batch_attribute_calls": 2, "scan_attempts": 2])
+                                            "batch_attribute_calls": 2, "scan_attempts": 2, "excluded_main_windows": 0])
         let wait = try XCTUnwrap(timings.spans.first { $0.name == "discovery_retry_wait" })
         XCTAssertEqual(wait.parentID, discovery.id)
         XCTAssertEqual(wait.durationMS, 250)

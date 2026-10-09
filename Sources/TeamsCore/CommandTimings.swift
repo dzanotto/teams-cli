@@ -23,10 +23,12 @@ public final class CommandTimings {
         var counters: [String: Int] = [:]
         var details: [String: String] = [:]
         var aggregates: [String: Aggregate] = [:]
+        var discoveryScans: [AccessibilityDiscoveryTimings.Scan] = []
 
         enum CodingKeys: String, CodingKey {
             case id, name, threw, counters, details, aggregates
             case parentID = "parent_id", startMS = "start_ms", durationMS = "duration_ms"
+            case discoveryScans = "discovery_scans"
         }
     }
 
@@ -92,15 +94,26 @@ public final class CommandTimings {
     }
 
     /// Accumulates repeated native requests on the current span without allocating a span per call.
-    func measureAggregate<T>(_ name: String, _ body: () throws -> T) rethrows -> T {
+    func measureAggregate<T>(_ name: String, record: ((Double) -> Void)? = nil,
+                             _ body: () throws -> T) rethrows -> T {
         let id = stack.last!
         let start = clock()
         defer {
             let durationMS = (clock() - start) * 1_000
             spans[id].aggregates[name, default: Aggregate()].count += 1
             spans[id].aggregates[name, default: Aggregate()].durationMS += durationMS
+            record?(durationMS)
         }
         return try body()
+    }
+
+    func makeDiscoveryTimings() -> AccessibilityDiscoveryTimings {
+        AccessibilityDiscoveryTimings(clock: clock)
+    }
+
+    func recordDiscoveryScan(_ scan: AccessibilityDiscoveryTimings.Scan) {
+        guard let id = stack.last else { return }
+        spans[id].discoveryScans.append(scan)
     }
 
     func detail(_ name: String, _ value: String) {
@@ -131,8 +144,9 @@ extension Optional where Wrapped == CommandTimings {
         return try recorder.measure(name, body)
     }
 
-    func measureAggregate<T>(_ name: String, _ body: () throws -> T) rethrows -> T {
+    func measureAggregate<T>(_ name: String, record: ((Double) -> Void)? = nil,
+                             _ body: () throws -> T) rethrows -> T {
         guard let recorder = self else { return try body() }
-        return try recorder.measureAggregate(name, body)
+        return try recorder.measureAggregate(name, record: record, body)
     }
 }

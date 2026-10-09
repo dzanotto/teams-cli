@@ -45,14 +45,21 @@ public final class TeamsAccessibilityReader {
     private let maxNodes = 12_000
     private let maxDepth = 80
     private let maxSeconds: TimeInterval = 8
+    private let mainWindowNodeLimit = 256
+    private let mainWindowDepthLimit = 24
     private let environment: AccessibilityReaderEnvironment
     private let timings: CommandTimings?
+    private let auditMainWindows: Bool
+    private let excludeMainWindows: Bool
 
     public convenience init() { self.init(environment: .live) }
 
-    init(environment: AccessibilityReaderEnvironment, timings: CommandTimings? = nil) {
+    init(environment: AccessibilityReaderEnvironment, timings: CommandTimings? = nil,
+         auditMainWindows: Bool = false, excludeMainWindows: Bool = true) {
         self.environment = environment
         self.timings = timings
+        self.auditMainWindows = auditMainWindows
+        self.excludeMainWindows = excludeMainWindows
     }
 
     public func read(control: MediaControl = .microphone, timeout: TimeInterval = 8) throws -> TeamsSnapshot {
@@ -61,6 +68,7 @@ public final class TeamsAccessibilityReader {
             timings?.increment("attribute_calls", by: 0)
             timings?.increment("batch_attribute_calls", by: 0)
             timings?.increment("scan_attempts", by: 0)
+            timings?.increment("excluded_main_windows", by: 0)
             let snapshot = try discover(control: control, timeout: timeout)
             timings?.detail("complete", String(snapshot.complete))
             return snapshot
@@ -100,6 +108,10 @@ public final class TeamsAccessibilityReader {
 
     private func scan(_ apps: [AccessibilityReaderApplication], control: MediaControl, deadline: TimeInterval) throws -> TeamsSnapshot {
         timings?.increment("scan_attempts")
+        let scanTimings = timings?.makeDiscoveryTimings()
+        defer {
+            if let scanTimings { timings?.recordDiscoveryScan(scanTimings.scan) }
+        }
         var visited = Set<AXUIElement>()
         var scheduled = Set<AXUIElement>()
         var complete = true
@@ -115,31 +127,69 @@ public final class TeamsAccessibilityReader {
                 throw TeamsReadError.accessibilityFailure(error.rawValue)
             }
             for window in windows {
+                scanTimings?.beginWindow(snapshots.count + 1)
+                defer { scanTimings?.endWindow() }
+                var mainWindowRecognition = TeamsMainWindowRecognition()
+                // Teams calls use separate windows. Only the known main shell is excluded;
+                // unfamiliar windows retain full discovery. Audit mode verifies this layout
+                // assumption with a full scan and never enables the early exit.
+                let canExcludeMainWindow = excludeMainWindows && !auditMainWindows &&
+                    (control == .microphone || control == .camera)
+                var windowComplete = true
+                var windowVisitedNodes = 0
                 var controls: [ControlSnapshot] = []
                 var windowHandles = CallWindowHandles(application: app.application, window: window)
-                var queue: [(AXUIElement, Int)] = []
+                var queue: [(AXUIElement, Int, Int)] = []
                 if scheduled.count < maxNodes && scheduled.insert(window).inserted {
-                    queue.append((window, 0))
-                } else { complete = false }
+                    queue.append((window, 0, 0))
+                } else {
+                    windowComplete = false
+                    scanTimings?.markIncomplete()
+                }
                 var cursor = 0
                 while cursor < queue.count {
                     guard visited.count < maxNodes, environment.uptime() < deadline else {
-                        complete = false
+                        windowComplete = false
+                        scanTimings?.markIncomplete()
                         break
                     }
-                    let (node, depth) = queue[cursor]
+                    let (node, depth, branch) = queue[cursor]
                     cursor += 1
                     guard visited.insert(node).inserted else { continue }
                     timings?.increment("visited_nodes")
+                    windowVisitedNodes += 1
+                    scanTimings?.visit(branch: branch, depth: depth)
                     environment.setMessagingTimeout(node, 0.25)
                     let fields = attributes(node, [kAXRoleAttribute, kAXChildrenAttribute],
-                                            group: "node_attributes")
-                    if fields.failed { complete = false }
+                                            group: "node_attributes", scanTimings: scanTimings, branch: branch)
+                    if fields.failed {
+                        windowComplete = false
+                        scanTimings?.markIncomplete()
+                    }
                     let role = fields.values[0] as? String ?? ""
-                    if role.isEmpty { complete = false }
+                    scanTimings?.recordRole(role, branch: branch)
+                    if role.isEmpty {
+                        windowComplete = false
+                        scanTimings?.markIncomplete()
+                    }
+                    // Bound classification work to the shell prefix. Missing markers, errors,
+                    // and call evidence fall back to the same traversal without restarting it.
+                    let probeMainWindow = auditMainWindows || (canExcludeMainWindow && windowComplete &&
+                        windowVisitedNodes <= mainWindowNodeLimit && depth <= mainWindowDepthLimit &&
+                        !mainWindowRecognition.hasCallControls)
+                    if probeMainWindow && role == "AXComboBox" {
+                        let identity = attributes(node, ["AXDOMIdentifier", kAXIdentifierAttribute],
+                                                  group: "main_window_identifiers", scanTimings: scanTimings, branch: branch)
+                        mainWindowRecognition.observe(role: role, identifiers: identity.values.compactMap { $0 as? String },
+                                                      complete: !identity.failed)
+                    }
                     if control == .hand && role == "AXImage" {
-                        let text = attributes(node, [kAXDescriptionAttribute], group: "image_labels")
-                        if text.failed { complete = false }
+                        let text = attributes(node, [kAXDescriptionAttribute], group: "image_labels",
+                                              scanTimings: scanTimings, branch: branch)
+                        if text.failed {
+                            windowComplete = false
+                            scanTimings?.markIncomplete()
+                        }
                         let indicator = ControlSnapshot(role: role, identifier: "", label: text.values[0] as? String ?? "")
                         if OwnVideoHandIndicator.matches(indicator) {
                             controls.append(indicator)
@@ -148,16 +198,26 @@ public final class TeamsAccessibilityReader {
                     }
                     if role == "AXButton" {
                         let identity = attributes(node, ["AXDOMIdentifier", kAXIdentifierAttribute],
-                                                  group: "button_identifiers")
-                        if identity.failed { complete = false }
+                                                  group: "button_identifiers", scanTimings: scanTimings, branch: branch)
+                        if identity.failed {
+                            windowComplete = false
+                            scanTimings?.markIncomplete()
+                        }
                         let identifiers = identity.values.compactMap { $0 as? String }
+                        if auditMainWindows || canExcludeMainWindow {
+                            mainWindowRecognition.observe(role: role, identifiers: identifiers, complete: !identity.failed)
+                        }
                         if let identifier = identifiers.first(where: {
                             ["microphone-button", "video-button", "hangup-button", "resume-button"].contains($0) ||
                                 (control == .hand && $0 == MediaControl.hand.rawValue)
                         }) {
                             let text = attributes(node, [kAXDescriptionAttribute, kAXTitleAttribute, kAXHelpAttribute],
-                                                  group: "control_labels")
-                            if text.failed { complete = false }
+                                                  group: "control_labels", scanTimings: scanTimings, branch: branch)
+                            if text.failed {
+                                windowComplete = false
+                                scanTimings?.markIncomplete()
+                            }
+                            scanTimings?.recordControl(identifier, branch: branch)
                             let label = text.values.compactMap { $0 as? String }.first(where: { !$0.isEmpty }) ?? ""
                             controls.append(ControlSnapshot(role: role, identifier: identifier, label: label))
                             if identifier == "microphone-button" { windowHandles.microphones.append(node) }
@@ -166,31 +226,59 @@ public final class TeamsAccessibilityReader {
                             if identifier == MediaControl.hand.rawValue { windowHandles.hands.append(node) }
                         }
                     }
+                    if canExcludeMainWindow && probeMainWindow && windowComplete &&
+                        mainWindowRecognition.result == .mainShell {
+                        guard environment.uptime() < deadline else {
+                            windowComplete = false
+                            scanTimings?.markIncomplete()
+                            break
+                        }
+                        // Discard only the unvisited queue belonging to this window. Its
+                        // prefix still counts toward the scan budget; later windows are fresh.
+                        for (pending, _, _) in queue[cursor...] { scheduled.remove(pending) }
+                        timings?.increment("excluded_main_windows")
+                        scanTimings?.excludeMainWindow()
+                        break
+                    }
                     let children = fields.values[1] as? [AXUIElement] ?? []
                     if depth >= maxDepth {
-                        if !children.isEmpty { complete = false }
+                        if !children.isEmpty {
+                            windowComplete = false
+                            scanTimings?.markIncomplete()
+                        }
                     } else {
                         for child in children where !scheduled.contains(child) {
                             guard scheduled.count < maxNodes else {
-                                complete = false
+                                windowComplete = false
+                                scanTimings?.markIncomplete()
                                 break
                             }
                             scheduled.insert(child)
-                            queue.append((child, depth + 1))
+                            let childBranch = scanTimings?.branchForChild(of: branch, depth: depth + 1,
+                                                                          siblingCount: children.count) ?? 0
+                            queue.append((child, depth + 1, childBranch))
                         }
                     }
+                }
+                complete = complete && windowComplete
+                if auditMainWindows || canExcludeMainWindow {
+                    scanTimings?.recordMainWindowRecognition(mainWindowRecognition)
                 }
                 snapshots.append(WindowSnapshot(index: snapshots.count + 1, controls: controls))
                 handles[snapshots.count] = windowHandles
             }
         }
+        scanTimings?.finish(complete: complete)
         return TeamsSnapshot(windows: snapshots, complete: complete, focusUnchanged: nil, handles: handles)
     }
 
-    private func attributes(_ element: AXUIElement, _ names: [String], group: String) -> AttributeValues {
+    private func attributes(_ element: AXUIElement, _ names: [String], group: String,
+                            scanTimings: AccessibilityDiscoveryTimings?, branch: Int) -> AttributeValues {
         timings?.increment("attribute_calls")
         timings?.increment("batch_attribute_calls")
-        let (raw, error) = timings.measureAggregate(group) { environment.copyAttributes(element, names) }
+        let (raw, error) = timings.measureAggregate(group, record: { duration in
+            scanTimings?.recordRequest(group, durationMS: duration, branch: branch)
+        }) { environment.copyAttributes(element, names) }
         guard error == .success, let array = raw as? [Any], array.count == names.count else {
             return AttributeValues(values: Array(repeating: nil, count: names.count), failed: true)
         }

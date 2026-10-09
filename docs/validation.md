@@ -1,7 +1,7 @@
 # Validation Notes
 
-Historical evidence collected on 2026-10-05 and 2026-10-06, condensed from the
-original README. These checks describe the builds and local sessions tested at
+Historical evidence from local test sessions. The 2026-10-05 and 2026-10-06 notes
+were condensed from the original README. These checks describe the builds tested at
 the time; they are not a fresh validation of every subsequent change. Performance
 comparisons below retain their original baselines and measurement caveats.
 See the [README](../README.md) for current command behavior and how to run tests.
@@ -120,3 +120,46 @@ The measurement includes process startup, output, verification, and cleanup;
 it measures Teams-reported state, not audio delivery. Camera, hand, and call-end
 actions share the updated accessibility lifecycle but were not tested live in
 this validation.
+
+## Main-window exclusion — 2026-10-09
+
+The user confirmed that calls open in separate windows. A read-only audit using
+the full traversal found one call surface (116 nodes) and one main shell (813
+nodes), with no conflicting call controls and unchanged focus at its endpoints.
+The optimization recognizes the main shell again in every microphone/camera
+observation, then skips its remaining content. Unknown layouts retain full scans.
+The assumption about separate call windows remains a compatibility constraint.
+
+An explicitly authorized comparison alternated out-and-back pairs between frozen
+release binaries with full-window discovery and main-window exclusion. It ran 48
+toggles: six per control, binary, and diagnostic mode, split evenly between both
+directions. All 48 returned success, changed state, and preserved focus. Separate
+status reads confirmed that both binaries agreed before testing and that the
+microphone finished muted and the camera off, matching the initial states.
+
+The table reports arithmetic mean launch-to-exit time **without `--timings`**,
+including startup, verification, cleanup, and output. Each cell has six samples.
+
+| Control | Full scan mean (ms) | Exclusion mean (ms) | Reduction |
+| --- | ---: | ---: | ---: |
+| Microphone toggle | 673.51 | 318.57 | 52.70% |
+| Camera toggle | 876.64 | 458.61 | 47.69% |
+
+Microphone medians were 648.34 → 312.19 ms; camera medians were 890.18 → 457.41 ms.
+Separate instrumented means were 707.17 → 404.11 ms for microphone and
+810.94 → 466.45 ms for camera. Do not pool instrumented and uninstrumented samples.
+
+The instrumented baseline completed 51 discovery scans; the candidate completed
+55. Every candidate scan excluded exactly one main window and completed call
+discovery. Mean main-window traversal fell from 819.98 nodes / 107.80 ms to
+118 nodes / 17.55 ms. Call-window scans still traversed approximately 117 nodes.
+Microphone verification required two observations in every traced run. Camera-on
+verification required three in the baseline and four or five in the candidate:
+faster reads can start polling before the camera is ready. Both builds retained
+two consecutive confirmations and the same polling cadence.
+
+These are small samples from one local session, not a guarantee across UI loads
+or Teams versions. They measure Teams-reported state and command completion, not
+audio/video delivery. Automated validation passed 500 tests and a release build;
+combined source line coverage was 87.93%. No live hand or call-end actions were
+part of this comparison.
