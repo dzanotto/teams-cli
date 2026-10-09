@@ -55,6 +55,9 @@ jobs:
           bash scripts/build-release.sh "${RELEASE_TAG:-v0.0.0}"
           .build/release/teams-cli --help
           .build/release/teams-cli --version
+      - name: Build read-only compatibility diagnostic and check help
+        shell: bash
+        run: bash scripts/check-teams-compatibility.sh --help
       - name: Check release packaging
         shell: bash
         run: bash scripts/package-release.sh "${RELEASE_TAG:-v0.0.0}" "$EXPECTED_ARCH"

@@ -395,6 +395,23 @@ evidence.
 
 ## Testing
 
+After a Teams update, run the read-only compatibility check from this checkout:
+
+```sh
+bash scripts/check-teams-compatibility.sh --language en
+```
+
+Keep the Teams main window open, join one non-held call, and leave your own video
+tile visible. Run from a terminal with Accessibility permission and keep focus
+still. The check reports `PASS`, `FAIL`, or `INCONCLUSIVE`, saves JSON under
+`.build/teams-compatibility/latest.json`, and never presses controls or activates
+Teams. It checks the current checkout's TeamsCore; a pass does not qualify live
+actions or an independently installed CLI binary. See the
+[compatibility-check guide](docs/compatibility.md) for baselines, comparisons,
+exit codes, and the scope of the evidence.
+Missing `AXPress` in this read-only check is inconclusive: action commands first
+enable enhanced Accessibility, which the diagnostic deliberately does not do.
+
 ```sh
 swift test
 ```
