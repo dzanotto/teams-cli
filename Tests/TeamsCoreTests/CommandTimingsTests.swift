@@ -40,6 +40,49 @@ final class CommandTimingsTests: XCTestCase {
         XCTAssertThrowsError(try timings.measure("throw") { throw Failure.expected }) { error in
             XCTAssertTrue(error is Failure)
         }
+        XCTAssertEqual(timings.measureAggregate("value") { 42 }, 42)
+        XCTAssertThrowsError(try timings.measureAggregate("throw") { throw Failure.expected }) { error in
+            XCTAssertTrue(error is Failure)
+        }
+    }
+
+    func testRepeatedMeasurementsAggregatePerParentIncludingFailedRequests() throws {
+        var now: TimeInterval = 10
+        let timings = CommandTimings(clock: { now })
+        try timings.measure("first_scan") {
+            for _ in 0..<100 {
+                timings.measureAggregate("nodes") { now += 0.001 }
+            }
+            timings.measureAggregate("labels") { now += 0.002 }
+            XCTAssertThrowsError(try timings.measureAggregate("nodes") {
+                now += 0.003
+                throw Failure.expected
+            })
+        }
+        timings.measure("second_scan") {
+            XCTAssertEqual(timings.measureAggregate("nodes") {
+                now += 0.004
+                return 42
+            }, 42)
+        }
+        XCTAssertEqual(timings.spans.map(\.name), ["command", "first_scan", "second_scan"])
+        XCTAssertTrue(timings.spans[0].aggregates.isEmpty)
+        let first = try XCTUnwrap(timings.spans[1].aggregates["nodes"])
+        XCTAssertEqual(first.count, 101)
+        XCTAssertEqual(first.durationMS, 103, accuracy: 0.0001)
+        let labels = try XCTUnwrap(timings.spans[1].aggregates["labels"])
+        XCTAssertEqual(labels.count, 1)
+        XCTAssertEqual(labels.durationMS, 2, accuracy: 0.0001)
+        let second = try XCTUnwrap(timings.spans[2].aggregates["nodes"])
+        XCTAssertEqual(second.count, 1)
+        XCTAssertEqual(second.durationMS, 4, accuracy: 0.0001)
+        try timings.emit(command: "mic toggle", exitCode: 0) { text in
+            let record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+            let spans = try XCTUnwrap(record["spans"] as? [[String: Any]])
+            let aggregates = try XCTUnwrap(spans[1]["aggregates"] as? [String: [String: Any]])
+            XCTAssertEqual(aggregates["nodes"]?["count"] as? Int, 101)
+            XCTAssertEqual(try XCTUnwrap(aggregates["nodes"]?["duration_ms"] as? Double), 103, accuracy: 0.0001)
+        }
     }
 
     func testBothToggleDirectionsKeepEventsReadsWaitsAndResultsUnchanged() throws {

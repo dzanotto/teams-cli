@@ -3,6 +3,16 @@ import Foundation
 /// Buffered diagnostics for one synchronous invocation. Never shared across commands or threads.
 /// All measurements use a separate clock; action deadlines keep their original clock and reads.
 public final class CommandTimings {
+    struct Aggregate: Encodable {
+        var count = 0
+        var durationMS: Double = 0
+
+        enum CodingKeys: String, CodingKey {
+            case count
+            case durationMS = "duration_ms"
+        }
+    }
+
     struct Span: Encodable {
         let id: Int
         let parentID: Int?
@@ -12,9 +22,10 @@ public final class CommandTimings {
         var threw = false
         var counters: [String: Int] = [:]
         var details: [String: String] = [:]
+        var aggregates: [String: Aggregate] = [:]
 
         enum CodingKeys: String, CodingKey {
-            case id, name, threw, counters, details
+            case id, name, threw, counters, details, aggregates
             case parentID = "parent_id", startMS = "start_ms", durationMS = "duration_ms"
         }
     }
@@ -80,6 +91,18 @@ public final class CommandTimings {
         spans[id].counters[name, default: 0] += amount
     }
 
+    /// Accumulates repeated native requests on the current span without allocating a span per call.
+    func measureAggregate<T>(_ name: String, _ body: () throws -> T) rethrows -> T {
+        let id = stack.last!
+        let start = clock()
+        defer {
+            let durationMS = (clock() - start) * 1_000
+            spans[id].aggregates[name, default: Aggregate()].count += 1
+            spans[id].aggregates[name, default: Aggregate()].durationMS += durationMS
+        }
+        return try body()
+    }
+
     func detail(_ name: String, _ value: String) {
         guard let id = stack.last else { return }
         spans[id].details[name] = value
@@ -106,5 +129,10 @@ extension Optional where Wrapped == CommandTimings {
     public func measure<T>(_ name: String, _ body: () throws -> T) rethrows -> T {
         guard let recorder = self else { return try body() }
         return try recorder.measure(name, body)
+    }
+
+    func measureAggregate<T>(_ name: String, _ body: () throws -> T) rethrows -> T {
+        guard let recorder = self else { return try body() }
+        return try recorder.measureAggregate(name, body)
     }
 }

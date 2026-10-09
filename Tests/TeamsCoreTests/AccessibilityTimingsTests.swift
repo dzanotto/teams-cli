@@ -28,6 +28,16 @@ final class AccessibilityTimingsTests: XCTestCase {
                                             "batch_attribute_calls": 7, "scan_attempts": 1])
         XCTAssertEqual(discovery.details["complete"], "true")
         XCTAssertEqual(discovery.durationMS, 70, accuracy: 0.0001)
+        let nodes = try XCTUnwrap(discovery.aggregates["node_attributes"])
+        XCTAssertEqual(nodes.count, 3)
+        XCTAssertEqual(nodes.durationMS, 30, accuracy: 0.0001)
+        let identifiers = try XCTUnwrap(discovery.aggregates["button_identifiers"])
+        XCTAssertEqual(identifiers.count, 2)
+        XCTAssertEqual(identifiers.durationMS, 20, accuracy: 0.0001)
+        let labels = try XCTUnwrap(discovery.aggregates["control_labels"])
+        XCTAssertEqual(labels.count, 2)
+        XCTAssertEqual(labels.durationMS, 20, accuracy: 0.0001)
+        XCTAssertEqual(timings.spans.count, 4)
         XCTAssertEqual(timings.spans.filter { $0.name == "reader_focus_check" }.count, 2)
         try timings.emit(command: "mic toggle", exitCode: 0) { text in
             XCTAssertFalse(text.contains("Private"))
@@ -49,6 +59,8 @@ final class AccessibilityTimingsTests: XCTestCase {
         XCTAssertEqual(wait.parentID, discovery.id)
         XCTAssertEqual(wait.durationMS, 250)
         XCTAssertEqual(discovery.durationMS, 250)
+        XCTAssertEqual(discovery.aggregates["node_attributes"]?.count, 2)
+        XCTAssertEqual(discovery.aggregates["node_attributes"]?.durationMS, 0)
         XCTAssertEqual(stub.sleeps, [0.25])
     }
 
@@ -68,6 +80,7 @@ final class AccessibilityTimingsTests: XCTestCase {
             XCTAssertEqual(discovery.counters["visited_nodes"], throwing ? 0 : 1)
             XCTAssertEqual(discovery.counters["attribute_calls"], throwing ? 1 : 2)
             XCTAssertEqual(discovery.details["complete"], throwing ? nil : "false")
+            XCTAssertEqual(discovery.aggregates["node_attributes"]?.count, throwing ? nil : 1)
         }
     }
 }

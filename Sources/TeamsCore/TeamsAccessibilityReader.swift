@@ -132,12 +132,13 @@ public final class TeamsAccessibilityReader {
                     guard visited.insert(node).inserted else { continue }
                     timings?.increment("visited_nodes")
                     environment.setMessagingTimeout(node, 0.25)
-                    let fields = attributes(node, [kAXRoleAttribute, kAXChildrenAttribute])
+                    let fields = attributes(node, [kAXRoleAttribute, kAXChildrenAttribute],
+                                            group: "node_attributes")
                     if fields.failed { complete = false }
                     let role = fields.values[0] as? String ?? ""
                     if role.isEmpty { complete = false }
                     if control == .hand && role == "AXImage" {
-                        let text = attributes(node, [kAXDescriptionAttribute])
+                        let text = attributes(node, [kAXDescriptionAttribute], group: "image_labels")
                         if text.failed { complete = false }
                         let indicator = ControlSnapshot(role: role, identifier: "", label: text.values[0] as? String ?? "")
                         if OwnVideoHandIndicator.matches(indicator) {
@@ -146,14 +147,16 @@ public final class TeamsAccessibilityReader {
                         }
                     }
                     if role == "AXButton" {
-                        let identity = attributes(node, ["AXDOMIdentifier", kAXIdentifierAttribute])
+                        let identity = attributes(node, ["AXDOMIdentifier", kAXIdentifierAttribute],
+                                                  group: "button_identifiers")
                         if identity.failed { complete = false }
                         let identifiers = identity.values.compactMap { $0 as? String }
                         if let identifier = identifiers.first(where: {
                             ["microphone-button", "video-button", "hangup-button", "resume-button"].contains($0) ||
                                 (control == .hand && $0 == MediaControl.hand.rawValue)
                         }) {
-                            let text = attributes(node, [kAXDescriptionAttribute, kAXTitleAttribute, kAXHelpAttribute])
+                            let text = attributes(node, [kAXDescriptionAttribute, kAXTitleAttribute, kAXHelpAttribute],
+                                                  group: "control_labels")
                             if text.failed { complete = false }
                             let label = text.values.compactMap { $0 as? String }.first(where: { !$0.isEmpty }) ?? ""
                             controls.append(ControlSnapshot(role: role, identifier: identifier, label: label))
@@ -184,10 +187,10 @@ public final class TeamsAccessibilityReader {
         return TeamsSnapshot(windows: snapshots, complete: complete, focusUnchanged: nil, handles: handles)
     }
 
-    private func attributes(_ element: AXUIElement, _ names: [String]) -> AttributeValues {
+    private func attributes(_ element: AXUIElement, _ names: [String], group: String) -> AttributeValues {
         timings?.increment("attribute_calls")
         timings?.increment("batch_attribute_calls")
-        let (raw, error) = environment.copyAttributes(element, names)
+        let (raw, error) = timings.measureAggregate(group) { environment.copyAttributes(element, names) }
         guard error == .success, let array = raw as? [Any], array.count == names.count else {
             return AttributeValues(values: Array(repeating: nil, count: names.count), failed: true)
         }

@@ -277,7 +277,7 @@ The record has `type: "timings"`, `schema_version: 1`, `command`, `exit_code`,
 `elapsed_ms`, `outcome`, and `spans`. Outcome fields contain the available state,
 reason, success, action-attempted, and changed values; unavailable values are omitted.
 Each span has an `id`, optional `parent_id`, `name`, `start_ms`, `duration_ms`,
-`threw`, `counters`, and `details`. IDs and offsets follow span start order.
+`threw`, `counters`, `details`, and `aggregates`. IDs and offsets follow span start order.
 Durations include child spans: **do not sum parents and their children**.
 `threw` means that the measured operation threw an error, not that every returned
 failure has that flag; use the command outcome to determine success.
@@ -294,6 +294,14 @@ requests, excluding focus snapshots and direct dispatch/readiness checks. Succes
 reads report completeness; thrown reads retain partial counters. Setup failure
 recovery is included in the setup span. No labels, titles, or participant data are
 recorded.
+
+Discovery `aggregates` group native batch requests into `node_attributes`,
+`button_identifiers`, `control_labels`, and (for hand discovery) `image_labels`.
+Each present group has `count` and summed `duration_ms`, including failed requests.
+These durations are already included in discovery and exclude attribute decoding,
+traversal, focus checks, and single-attribute requests. Aggregation avoids a span
+per visited node. Discovery reads role and children per node, identifiers only for
+buttons, and labels only for relevant controls.
 
 Timing uses a monotonic clock. `elapsed_ms` starts at the CLI's first timestamp,
 after collecting raw arguments and detecting the flag, and ends after normal
