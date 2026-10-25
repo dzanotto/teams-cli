@@ -1,11 +1,13 @@
 import Foundation
 
-/// Separate repository diagnostic, compiled with TeamsCore. Never invokes an action controller.
+/// Separate repository diagnostic, compiled with TeamsCore. Never presses a call control.
 @main
 enum TeamsCompatibilityCheck {
     static let usage = """
     Usage: bash scripts/check-teams-compatibility.sh [options]
       --language CODE       Teams UI language, supplied by you (otherwise unknown).
+      --setup-accessibility Temporarily enable enhanced Accessibility under the command lock;
+                            inspect capabilities, restore the setting, and monitor focus.
       --baseline FILE       Compare with a previously saved passing JSON report.
       --save-baseline FILE  Save this report as a baseline, only if all checks pass.
       --output FILE         JSON report destination (default: .build/teams-compatibility/latest.json).
@@ -15,9 +17,10 @@ enum TeamsCompatibilityCheck {
     Keep the Teams main window open and join one non-held call. Leave your self-video
     tile visible. Run from a terminal with Accessibility permission; keep focus still.
     This checks the current checkout's TeamsCore, not an installed teams-cli binary.
-    No controls are pressed, no AX attributes are written, and Teams is not activated.
-    PASS covers read-only discovery and advertised capabilities only, not live actions.
-    Missing AXPress is INCONCLUSIVE: the CLI's enhanced Accessibility setup is not run.
+    No controls are pressed and Teams is not activated. The default mode is read-only.
+    --setup-accessibility writes only AXEnhancedUserInterface, using the action lifecycle.
+    PASS covers discovery and advertised capabilities only, not live actions.
+    Missing AXPress is INCONCLUSIVE. Baselines must match the selected mode.
     Exit codes: 0 PASS/help, 1 FAIL, 2 INCONCLUSIVE, 64 invalid arguments, 74 file/report error.
     """
 
@@ -27,6 +30,10 @@ enum TeamsCompatibilityCheck {
         var saveBaseline: String?
         var output = ProcessInfo.processInfo.environment["TEAMS_COMPATIBILITY_DEFAULT_OUTPUT"]
         var json = false
+        var setupAccessibility = false
+        var scope: String {
+            setupAccessibility ? TeamsCompatibilityReport.setupScope : TeamsCompatibilityReport.readOnlyScope
+        }
 
         init(_ arguments: [String]) throws {
             var index = 0
@@ -34,8 +41,8 @@ enum TeamsCompatibilityCheck {
             while index < arguments.count {
                 let argument = arguments[index]
                 guard seen.insert(argument).inserted else { throw ArgumentError.invalid }
-                if argument == "--json" {
-                    json = true
+                if argument == "--json" || argument == "--setup-accessibility" {
+                    if argument == "--json" { json = true } else { setupAccessibility = true }
                     index += 1
                     continue
                 }
@@ -87,7 +94,7 @@ enum TeamsCompatibilityCheck {
             // Validate input before touching Teams or replacing any output file.
             let baseline = try options.baseline.map {
                 let report = try JSONDecoder().decode(TeamsCompatibilityReport.self, from: Data(contentsOf: URL(fileURLWithPath: $0)))
-                try report.validateBaseline()
+                try report.validateBaseline(expectedScope: options.scope)
                 return report
             }
             let environment = ProcessInfo.processInfo.environment
@@ -99,7 +106,9 @@ enum TeamsCompatibilityCheck {
                 "source_revision": environment["TEAMS_COMPATIBILITY_SOURCE_REVISION"] ?? "unknown",
                 "source_dirty": environment["TEAMS_COMPATIBILITY_SOURCE_DIRTY"] ?? "unknown"
             ]
-            var report = TeamsCompatibilityProbe().run(metadata: metadata)
+            var report = options.setupAccessibility
+                ? TeamsCompatibilitySetupProbe().run(metadata: metadata)
+                : TeamsCompatibilityProbe().run(metadata: metadata)
             if let baseline { report.comparison = try report.comparing(to: baseline) }
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -111,7 +120,7 @@ enum TeamsCompatibilityCheck {
                     try report.validateBaseline()
                     try data.write(to: URL(fileURLWithPath: saveBaseline), options: .atomic)
                 } else {
-                    stderr("Baseline unchanged: this run did not pass all read-only checks.")
+                    stderr("Baseline unchanged: this run did not pass all checks.")
                 }
             }
             if options.json {
@@ -122,7 +131,7 @@ enum TeamsCompatibilityCheck {
             }
             exit(report.exitCode)
         } catch CompatibilityReportError.invalidBaseline {
-            stderr("Invalid baseline: expected a complete passing schema-v1 read-only report.")
+            stderr("Invalid baseline: expected a complete passing schema-v1 report matching the selected mode.")
             exit(74)
         } catch {
             stderr("Cannot read or write the report/baseline: \(error.localizedDescription)")
@@ -132,12 +141,16 @@ enum TeamsCompatibilityCheck {
 
     static func summary(_ report: TeamsCompatibilityReport) -> String {
         let metadata = report.metadata
+        let setup = report.scope == TeamsCompatibilityReport.setupScope
+        let mode = setup ? "Accessibility setup" : "read-only"
         var lines = [
-            "\(report.outcome.rawValue): Teams read-only compatibility (actions not tested)",
+            "\(report.outcome.rawValue): Teams \(mode) compatibility (actions not tested)",
             "Teams \(metadata["teams_version"] ?? "unknown") (build \(metadata["teams_build"] ?? "unknown")); language \(metadata["teams_language"] ?? "unknown")",
             "\(metadata["macos_version"] ?? "unknown"); CLI source \(metadata["cli_version"] ?? "unknown") @ \(metadata["source_revision"] ?? "unknown") (dirty: \(metadata["source_dirty"] ?? "unknown"))"
         ]
-        if let before = metadata["enhanced_accessibility_before_scan"] {
+        if setup {
+            lines.append("Enhanced Accessibility: before setup \(metadata["enhanced_accessibility_before_setup"] ?? "not_checked"); during scan \(metadata["enhanced_accessibility_before_scan"] ?? "not_checked") -> \(metadata["enhanced_accessibility_after_probe"] ?? "not_checked"); after cleanup \(metadata["enhanced_accessibility_after_cleanup"] ?? "not_checked")")
+        } else if let before = metadata["enhanced_accessibility_before_scan"] {
             lines.append("Enhanced Accessibility: \(before) -> \(metadata["enhanced_accessibility_after_probe"] ?? "not_checked") (action setup not run)")
         }
         for check in report.checks {
@@ -146,6 +159,9 @@ enum TeamsCompatibilityCheck {
         }
         if report.checks.contains(where: { $0.reason == "axpress_not_advertised_read_only" }) {
             lines.append("NOTE: Missing AXPress in read-only mode does not establish broken actions. CLI actions temporarily enable enhanced Accessibility before checking AXPress.")
+        }
+        if report.checks.contains(where: { $0.reason == "axpress_not_advertised_after_setup" }) {
+            lines.append("NOTE: AXPress was not advertised after Accessibility setup. Button readiness and live actions remain unverified.")
         }
         lines.append(String(format: "Full scan: %.1f ms; total probe: %.1f ms (compilation excluded)", report.scanMS, report.elapsedMS))
         if let comparison = report.comparison {

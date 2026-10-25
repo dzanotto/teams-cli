@@ -15,11 +15,17 @@ struct CompatibilityCheck: Codable, Equatable {
 
 /// A deliberately small allowlisted report: never serialize AX snapshots or labels.
 struct TeamsCompatibilityReport: Codable {
+    static let readOnlyScope = "read_only_discovery"
+    static let setupScope = "accessibility_setup_discovery"
     static let checkIDs = [
         "accessibility", "teams", "inspection", "call_selection", "main_window_layout",
         "mic_state", "mic_press", "camera_state", "camera_press", "hand_state", "hand_press",
         "call_state", "call_press", "focus_endpoints", "process_identity"
     ]
+
+    static func checkIDs(for scope: String) -> [String] {
+        scope == setupScope ? checkIDs + ["accessibility_setup", "accessibility_cleanup", "focus_lifecycle"] : checkIDs
+    }
 
     let schemaVersion: Int
     let scope: String
@@ -37,13 +43,14 @@ struct TeamsCompatibilityReport: Codable {
         case scanMS = "scan_ms", elapsedMS = "elapsed_ms"
     }
 
-    init(metadata: [String: String], checks: [CompatibilityCheck], scanMS: Double, elapsedMS: Double) {
+    init(metadata: [String: String], checks: [CompatibilityCheck], scanMS: Double, elapsedMS: Double,
+         scope: String = TeamsCompatibilityReport.readOnlyScope) {
         schemaVersion = 1
-        scope = "read_only_discovery"
+        self.scope = scope
         recordedAt = ISO8601DateFormatter().string(from: Date())
         self.metadata = metadata
         self.checks = checks
-        outcome = Self.verdict(checks)
+        outcome = Self.verdict(checks, scope: scope)
         self.scanMS = scanMS
         self.elapsedMS = elapsedMS
     }
@@ -56,23 +63,26 @@ struct TeamsCompatibilityReport: Codable {
         }
     }
 
-    static func verdict(_ checks: [CompatibilityCheck]) -> CompatibilityVerdict {
+    static func verdict(_ checks: [CompatibilityCheck], scope: String = readOnlyScope) -> CompatibilityVerdict {
         if checks.contains(where: { $0.outcome == .fail }) { return .fail }
-        guard checks.count == checkIDs.count, Set(checks.map(\.id)) == Set(checkIDs),
+        let required = checkIDs(for: scope)
+        guard [readOnlyScope, setupScope].contains(scope),
+              checks.count == required.count, Set(checks.map(\.id)) == Set(required),
               checks.allSatisfy({ $0.outcome == .pass }) else { return .inconclusive }
         return .pass
     }
 
-    func validateBaseline() throws {
-        guard schemaVersion == 1, scope == "read_only_discovery",
-              outcome == .pass, Self.verdict(checks) == .pass,
+    func validateBaseline(expectedScope: String? = nil) throws {
+        guard schemaVersion == 1, [Self.readOnlyScope, Self.setupScope].contains(scope),
+              expectedScope == nil || scope == expectedScope,
+              outcome == .pass, Self.verdict(checks, scope: scope) == .pass,
               scanMS.isFinite, scanMS >= 0, elapsedMS.isFinite, elapsedMS >= 0 else {
             throw CompatibilityReportError.invalidBaseline
         }
     }
 
     func comparing(to baseline: Self) throws -> CompatibilityComparison {
-        try baseline.validateBaseline()
+        try baseline.validateBaseline(expectedScope: scope)
         let previous = Dictionary(uniqueKeysWithValues: baseline.checks.map { ($0.id, $0) })
         let changes = checks.compactMap { check -> CompatibilityComparison.CheckChange? in
             guard let old = previous[check.id], old.outcome != check.outcome || old.reason != check.reason else { return nil }

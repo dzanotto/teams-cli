@@ -410,7 +410,16 @@ actions or an independently installed CLI binary. See the
 [compatibility-check guide](docs/compatibility.md) for baselines, comparisons,
 exit codes, and the scope of the evidence.
 Missing `AXPress` in this read-only check is inconclusive: action commands first
-enable enhanced Accessibility, which the diagnostic deliberately does not do.
+enable enhanced Accessibility. To inspect capabilities with that setup, run:
+
+```sh
+bash scripts/check-teams-compatibility.sh --setup-accessibility --language en
+```
+
+This opt-in mode temporarily changes `AXEnhancedUserInterface` under the shared
+command lock, restores its original value, and monitors focus through cleanup.
+It never presses a call control. Reports use a separate scope and require baselines
+from the same mode; a pass still does not verify live actions.
 
 ```sh
 swift test

@@ -129,7 +129,7 @@ struct TeamsCompatibilityProbe {
         return report()
     }
 
-    private func enhancedAccessibility(_ application: AXUIElement) -> String {
+    func enhancedAccessibility(_ application: AXUIElement) -> String {
         readerEnvironment.setMessagingTimeout(application, 0.25)
         let (raw, error) = readerEnvironment.copyAttribute(application, "AXEnhancedUserInterface")
         guard error == .success, let raw, CFGetTypeID(raw) == CFBooleanGetTypeID(),

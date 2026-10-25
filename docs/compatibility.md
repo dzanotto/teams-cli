@@ -1,7 +1,7 @@
 # Checking a Teams update
 
 The repository diagnostic checks the installed Teams app through the current
-checkout's TeamsCore implementation. It reads Accessibility state and advertised
+checkout's TeamsCore implementation. By default it reads Accessibility state and advertised
 button capabilities. It never presses a control, activates Teams, restores focus,
 changes `AXEnhancedUserInterface`, or opens a permission prompt. It uses the normal
 WebView-helper role read to make the Accessibility tree available.
@@ -106,11 +106,45 @@ passing baseline. The report records the enhanced Accessibility setting before
 the scan and after the probe (`true`, `false`, or `unavailable`) without writing it.
 A value of `true` alone does not establish that the action tree is ready.
 
+## Check with Accessibility setup
+
+To inspect capabilities after the same enhanced Accessibility setup used by action
+commands, explicitly select:
+
+```sh
+bash scripts/check-teams-compatibility.sh --setup-accessibility --language en
+```
+
+This mode acquires the shared media-command lock, starts focus monitoring, temporarily
+enables `AXEnhancedUserInterface`, runs the full probe, restores the original setting,
+and checks focus after cleanup. It never presses controls, activates Teams, restores
+focus, or opens permission prompts. The original setting must be readable; setup
+and cleanup reuse the action lifecycle's bounded readback and process-generation
+checks. A replacement process is never deliberately written during restoration.
+
+The JSON `scope` is `accessibility_setup_discovery` rather than `read_only_discovery`.
+It adds `accessibility_setup`, `accessibility_cleanup`, and `focus_lifecycle` checks,
+plus enhanced Accessibility observations before setup and after cleanup. The total
+probe time includes setup and cleanup; scan time retains its usual meaning. Cleanup
+failure is `FAIL` (`accessibility_cleanup_failed`); lock contention, unavailable setup,
+changed/unavailable focus, or process replacement are `INCONCLUSIVE`. Failed setup
+can leave checks marked `not_checked`; it does not perform an unlocked fallback scan.
+Missing `AXPress` remains inconclusive with `axpress_not_advertised_after_setup`:
+setting the attribute is not proof of button readiness. The main-window recognition
+check still requires its profile/search markers, even when the window is open.
+
+Baselines must come from the same mode. A mismatched baseline is rejected before
+any Accessibility setup or report write. Use different baseline filenames for the
+two modes. The default report destination remains `latest.json` for either mode;
+use `--output` to keep both reports. Only a complete pass, including cleanup and
+focus monitoring, can be saved as a setup-mode baseline.
+
 The JSON report includes schema version, scope, timestamp, Teams bundle version
 and build, user-supplied language, macOS version, source CLI version (`dev`), Git
 revision and dirty state, enhanced Accessibility observations, fixed reason strings,
 recognized states, and timings. Existing schema-v1 passing baselines remain usable;
-older reports simply lack the enhanced Accessibility metadata.
+older reports simply lack the enhanced Accessibility metadata. Setup-mode reports
+also include the lifecycle observations described above.
 It excludes AX snapshots, labels, meeting/window titles, participant names, and
 application paths. The probe is compiled from this checkout; it does not exercise
 a Homebrew/downloaded `teams-cli` executable. Check out the corresponding CLI tag
@@ -120,16 +154,17 @@ reproducible revision.
 ## Evidence limits
 
 A pass establishes discovery and advertised capabilities for the observed state
-and layout only. The check takes one full observation, not a transition test; it
-cannot establish both sides of a toggle, transient focus safety, successful
-Accessibility setup/cleanup, actual `AXPress` behavior, or call-end verification.
-Endpoint focus comparisons can miss transient focus changes. No audio/video
-delivery is measured.
+and layout only. Both modes take one full observation, not a transition test; neither
+establishes both sides of a toggle, actual `AXPress` behavior, or call-end verification.
+The default mode does not exercise Accessibility setup/cleanup and only compares
+focus at scan endpoints. Setup mode verifies the attribute lifecycle and adds focus
+monitoring, whose notifications are best effort; it does not prove transient focus
+safety for a real button press. No audio/video delivery is measured.
 
 Live action qualification remains a separate, explicitly authorized test in a
 disposable call: microphone/camera/hand in both directions, then Leave last, using
 the existing controllers and stopping on any uncertain outcome. That action
-harness is not part of this read-only diagnostic. Cold startup, minimized windows,
+harness is not part of this diagnostic. Cold startup, minimized windows,
 other languages and other call layouts require their own observations.
 
 `swift test` exercises this diagnostic with scripted Accessibility trees, including

@@ -251,6 +251,190 @@ final class TeamsCompatibilityTests: XCTestCase {
         }
     }
 
+    func testSetupProbeUsesLockRestoresBothOriginalValuesAndSupportsSeparateBaselines() throws {
+        for original in [false, true] {
+            let stub = healthyTree()
+            let harness = try CommandLifecycleHarness()
+            harness.client.value = original
+            var subject = setupProbe(stub, harness)
+            subject.probe.capabilities = { _ in
+                harness.assertLocked()
+                XCTAssertEqual(harness.client.value, true)
+                return .init(outcome: .pass, reason: "enabled_and_axpress_available")
+            }
+            harness.client.onWait = { _ in harness.assertLocked() }
+            let report = subject.run(metadata: [:], environment: harness.environment)
+            XCTAssertEqual(report.outcome, .pass)
+            XCTAssertEqual(report.scope, TeamsCompatibilityReport.setupScope)
+            XCTAssertEqual(report.metadata["enhanced_accessibility_before_setup"], String(original))
+            XCTAssertEqual(report.metadata["enhanced_accessibility_before_scan"], "true")
+            XCTAssertEqual(report.metadata["enhanced_accessibility_after_cleanup"], String(original))
+            XCTAssertEqual(harness.client.value, original)
+            XCTAssertEqual(harness.client.writes, original ? [] : [true, false])
+            XCTAssertEqual(check(report, "accessibility_cleanup").outcome, .pass)
+            XCTAssertEqual(check(report, "focus_lifecycle").outcome, .pass)
+            harness.assertUnlocked()
+            XCTAssertNoThrow(try report.validateBaseline(expectedScope: TeamsCompatibilityReport.setupScope))
+            XCTAssertNoThrow(try report.comparing(to: report))
+            let readOnly = passingReport(scanMS: 100)
+            XCTAssertThrowsError(try report.comparing(to: readOnly))
+            XCTAssertThrowsError(try readOnly.comparing(to: report))
+        }
+    }
+
+    func testSetupProbeStopsWithoutWritesForDeniedPermissionBusyLockAndUnavailableSetup() throws {
+        for scenario in ["denied", "busy", "lock_error", "unknown_value", "absent", "unknown_generation"] {
+            let stub = healthyTree()
+            let harness = try CommandLifecycleHarness()
+            if scenario == "denied" { harness.trusted = false }
+            if scenario == "unknown_value" { harness.client.value = nil }
+            if scenario == "absent" { stub.applications = [] }
+            var subject = setupProbe(stub, harness)
+            if scenario == "unknown_generation" { subject.probe.processIdentity = { _ in nil } }
+            let heldLock = scenario == "busy" ? try MediaCommandLock(path: harness.path) : nil
+            defer { heldLock?.release() }
+            var environment = harness.environment
+            if scenario == "lock_error" {
+                environment = MediaCommandEnvironment(isTrusted: { true }, acquireLock: {
+                    throw MicrophoneCommandError.lockUnavailable
+                }, makeFocus: { harness.focus }, makeExposure: {
+                    XCTFail("Must not set up without a lock")
+                    return try TeamsAccessibilityExposure(client: harness.client)
+                })
+            }
+            let report = subject.run(metadata: [:], environment: environment)
+            XCTAssertEqual(report.outcome, .inconclusive, scenario)
+            XCTAssertTrue(harness.client.writes.isEmpty, scenario)
+            XCTAssertTrue(stub.batchReads.isEmpty, scenario)
+            if scenario == "busy" {
+                XCTAssertEqual(check(report, "accessibility_setup").reason, "command_in_progress")
+            }
+            XCTAssertThrowsError(try report.validateBaseline(), scenario)
+        }
+    }
+
+    func testSetupProbeFinalizesFailedSetupWithoutScanningOrRetryingCleanup() throws {
+        for cleanupFails in [false, true] {
+            let stub = healthyTree()
+            let harness = try CommandLifecycleHarness()
+            harness.client.waitResults = [.timedOut, cleanupFails ? .timedOut : .confirmed]
+            let report = setupProbe(stub, harness).run(metadata: [:], environment: harness.environment)
+            XCTAssertEqual(report.outcome, cleanupFails ? .fail : .inconclusive)
+            XCTAssertTrue(stub.batchReads.isEmpty)
+            XCTAssertEqual(harness.client.writes, [true, false])
+            XCTAssertEqual(check(report, "accessibility_setup").reason,
+                           cleanupFails ? "accessibility_cleanup_failed" : "accessibility_setup_unavailable")
+            harness.assertUnlocked()
+        }
+    }
+
+    func testSetupProbeCleanupFailureCannotPassOrBecomeBaseline() throws {
+        let stub = healthyTree()
+        let harness = try CommandLifecycleHarness()
+        harness.client.waitResults = [.confirmed, .timedOut]
+        let report = setupProbe(stub, harness).run(metadata: [:], environment: harness.environment)
+        XCTAssertEqual(check(report, "mic_press").outcome, .pass)
+        XCTAssertEqual(check(report, "accessibility_cleanup").outcome, .fail)
+        XCTAssertEqual(report.outcome, .fail)
+        XCTAssertEqual(harness.client.writes, [true, false])
+        XCTAssertThrowsError(try report.validateBaseline())
+        harness.assertUnlocked()
+    }
+
+    func testSetupProbeRestoresAfterFailedOrInconclusiveDiscovery() throws {
+        for scenario in ["no_call", "read_error", "bad_label"] {
+            let stub = healthyTree()
+            let harness = try CommandLifecycleHarness()
+            if scenario == "no_call" { stub.values[stub.root]?[kAXWindowsAttribute] = [] as [AXUIElement] }
+            if scenario == "read_error" { stub.singleErrors[stub.root] = .cannotComplete }
+            if scenario == "bad_label" {
+                let children = stub.values[callWindow(stub)]?[kAXChildrenAttribute] as! [AXUIElement]
+                stub.values[children[0]]?[kAXDescriptionAttribute] = "unrecognized"
+            }
+            let subject = setupProbe(stub, harness)
+            let report = subject.run(metadata: [:], environment: harness.environment)
+            XCTAssertNotEqual(report.outcome, .pass, scenario)
+            XCTAssertEqual(check(report, "accessibility_cleanup").outcome, .pass, scenario)
+            XCTAssertEqual(harness.client.value, false)
+            XCTAssertEqual(harness.client.writes, [true, false])
+            harness.assertUnlocked()
+        }
+    }
+
+    func testSetupProbeReportsLifecycleFocusEvenWhenScanEndpointsMatch() throws {
+        for focus: Bool? in [false, nil] {
+            let stub = healthyTree()
+            let harness = try CommandLifecycleHarness()
+            harness.focus.result = focus
+            let report = setupProbe(stub, harness).run(metadata: [:], environment: harness.environment)
+            XCTAssertEqual(check(report, "focus_endpoints").outcome, .pass)
+            XCTAssertEqual(check(report, "focus_lifecycle").reason, focus == nil ? "focus_unavailable" : "focus_changed")
+            XCTAssertEqual(report.outcome, .inconclusive)
+            XCTAssertEqual(harness.client.value, false)
+        }
+    }
+
+    func testSetupProbeInvalidatesProcessReplacementDuringSetupScanOrCleanup() throws {
+        for phase in ["setup", "scan", "cleanup"] {
+            let stub = healthyTree()
+            let harness = try CommandLifecycleHarness()
+            var subject = setupProbe(stub, harness)
+            var generation: Double = 100
+            subject.probe.processIdentity = { _ in MediaProcessGeneration(pid: 42, launched: Date(timeIntervalSince1970: generation)) }
+            let replace = {
+                generation = 200
+                harness.client.generation = false
+            }
+            if phase == "setup" { harness.client.onWait = { enabled in if enabled { replace() } } }
+            if phase == "scan" { stub.onBatchRead = { _, _ in replace() } }
+            if phase == "cleanup" { harness.client.onWait = { enabled in if !enabled { replace() } } }
+            let report = subject.run(metadata: [:], environment: harness.environment)
+            XCTAssertEqual(report.outcome, .inconclusive, phase)
+            XCTAssertEqual(check(report, "process_identity").reason, "process_changed_or_unavailable", phase)
+            XCTAssertEqual(check(report, "accessibility_setup").outcome, .inconclusive, phase)
+            XCTAssertEqual(report.metadata["enhanced_accessibility_after_cleanup"], "process_changed_or_unavailable", phase)
+            XCTAssertEqual(harness.client.writes, phase == "cleanup" ? [true, false] : [true], phase)
+            if phase == "setup" { XCTAssertTrue(stub.batchReads.isEmpty) }
+            harness.assertUnlocked()
+        }
+    }
+
+    func testSetupProbeDoesNotTreatEnabledAttributeAsProofOfPressReadiness() throws {
+        let stub = healthyTree()
+        let harness = try CommandLifecycleHarness()
+        var subject = setupProbe(stub, harness)
+        subject.probe.capabilities = { _ in .init(outcome: .inconclusive, reason: "axpress_not_advertised_read_only") }
+        let report = subject.run(metadata: [:], environment: harness.environment)
+        XCTAssertEqual(check(report, "accessibility_setup").outcome, .pass)
+        XCTAssertEqual(check(report, "mic_press").reason, "axpress_not_advertised_after_setup")
+        XCTAssertEqual(report.outcome, .inconclusive)
+        XCTAssertEqual(harness.client.value, false)
+    }
+
+    func testSetupProbeCannotPassWhenAttributeChangesDuringScan() throws {
+        let stub = healthyTree()
+        let harness = try CommandLifecycleHarness()
+        let subject = setupProbe(stub, harness)
+        stub.onBatchRead = { _, _ in stub.values[stub.root]?["AXEnhancedUserInterface"] = false }
+        let report = subject.run(metadata: [:], environment: harness.environment)
+        XCTAssertEqual(check(report, "accessibility_setup").reason, "enhanced_accessibility_not_confirmed")
+        XCTAssertEqual(report.outcome, .inconclusive)
+    }
+
+    func testSetupScopeCannotQualifyWithoutLifecycleChecks() {
+        let readOnly = passingReport(scanMS: 100)
+        let forged = TeamsCompatibilityReport(metadata: [:], checks: readOnly.checks, scanMS: 100, elapsedMS: 100,
+                                             scope: TeamsCompatibilityReport.setupScope)
+        XCTAssertEqual(forged.outcome, .inconclusive)
+        XCTAssertThrowsError(try forged.validateBaseline())
+    }
+
+    private func setupProbe(_ stub: AccessibilityReaderStub, _ harness: CommandLifecycleHarness) -> TeamsCompatibilitySetupProbe {
+        stub.values[stub.root]?["AXEnhancedUserInterface"] = harness.client.value
+        harness.client.onWrite = { stub.values[stub.root]?["AXEnhancedUserInterface"] = $0 }
+        return TeamsCompatibilitySetupProbe(probe: probe(stub))
+    }
+
     private func passingReport(scanMS: Double) -> TeamsCompatibilityReport {
         TeamsCompatibilityReport(metadata: ["teams_build": "old"], checks: TeamsCompatibilityReport.checkIDs.map {
             CompatibilityCheck(id: $0, outcome: .pass, reason: "recognized", state: $0 == "mic_state" ? "unmuted" : nil)
