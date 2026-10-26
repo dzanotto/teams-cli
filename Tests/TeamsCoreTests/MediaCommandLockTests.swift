@@ -109,8 +109,10 @@ final class MediaCommandLockTests: XCTestCase {
 
     private func runChild(path: String, expectation: String, directory: URL) throws {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["xctest", "-XCTest", "\(NSStringFromClass(Self.self))/testLockContendsAcrossProcesses",
+        // Reuse the current XCTest runner: launching through /usr/bin/xcrun strips
+        // the DYLD paths SwiftPM supplies for standalone Swift toolchain libraries.
+        process.executableURL = try XCTUnwrap(Bundle.main.executableURL)
+        process.arguments = ["-XCTest", "\(NSStringFromClass(Self.self))/testLockContendsAcrossProcesses",
                              Bundle(for: Self.self).bundleURL.path]
         var environment = [
             "PATH": "/usr/bin:/bin", "TEAMS_TEST_CHILD_LOCK_PATH": path,
