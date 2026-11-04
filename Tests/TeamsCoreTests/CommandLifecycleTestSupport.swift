@@ -39,12 +39,12 @@ final class ScriptedExposureClient: AccessibilityExposureClient {
 }
 
 func assertCommandError<T>(
-    _ expected: MicrophoneCommandError,
+    _ expected: MediaCommandError,
     file: StaticString = #filePath, line: UInt = #line,
     _ operation: () throws -> T
 ) {
     XCTAssertThrowsError(try operation(), file: file, line: line) { error in
-        guard let actual = error as? MicrophoneCommandError else {
+        guard let actual = error as? MediaCommandError else {
             return XCTFail("Unexpected error: \(error)", file: file, line: line)
         }
         XCTAssertEqual(actual, expected, file: file, line: line)

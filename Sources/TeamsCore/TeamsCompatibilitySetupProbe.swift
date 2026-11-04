@@ -41,7 +41,7 @@ struct TeamsCompatibilitySetupProbe {
         }, acquireLock: environment.acquireLock, makeFocus: environment.makeFocus, makeExposure: {
             let apps = probe.readerEnvironment.runningApplications("com.microsoft.teams2")
             guard apps.count == 1, let identity = probe.processIdentity(apps[0].application) else {
-                throw MicrophoneCommandError.accessibilitySetupUnavailable
+                throw MediaCommandError.accessibilitySetupUnavailable
             }
             originalProcess = identity
             metadata["enhanced_accessibility_before_setup"] = probe.enhancedAccessibility(apps[0].element)
@@ -89,9 +89,9 @@ struct TeamsCompatibilitySetupProbe {
             let reason: String
             switch error {
             case TeamsReadError.accessibilityDenied: reason = "accessibility_denied"
-            case MicrophoneCommandError.commandInProgress: reason = "command_in_progress"
-            case MicrophoneCommandError.lockUnavailable: reason = "lock_unavailable"
-            case MicrophoneCommandError.accessibilityCleanupFailed: reason = "accessibility_cleanup_failed"
+            case MediaCommandError.commandInProgress: reason = "command_in_progress"
+            case MediaCommandError.lockUnavailable: reason = "lock_unavailable"
+            case MediaCommandError.accessibilityCleanupFailed: reason = "accessibility_cleanup_failed"
             default: reason = "accessibility_setup_unavailable"
             }
             set("accessibility_setup", .inconclusive, reason)

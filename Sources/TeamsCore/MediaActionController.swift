@@ -60,10 +60,6 @@ struct MediaActionController<Observation: MediaObservation> {
     var timings: CommandTimings? = nil
     var retryIncompleteVerification = false
 
-    func set(_ target: Observation.State) throws -> MediaActionOutcome<Observation> {
-        try perform { _ in target }
-    }
-
     /// Resolve the desired state once, from the first validated observation.
     /// Rechecks retain that target so a concurrent change cannot reverse the intent.
     func perform(targetFor resolveTarget: (Observation.State) -> Observation.State) throws -> MediaActionOutcome<Observation> {

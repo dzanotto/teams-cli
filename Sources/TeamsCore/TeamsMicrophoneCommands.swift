@@ -1,12 +1,5 @@
 import Foundation
 
-public enum MicrophoneCommandError: Error {
-    case commandInProgress
-    case lockUnavailable
-    case accessibilitySetupUnavailable
-    case accessibilityCleanupFailed
-}
-
 /// Serializes cooperating media commands and changes the selected microphone button.
 public enum TeamsMicrophoneCommands {
     public static func set(_ target: MicrophoneTarget) throws -> MicrophoneActionResult {

@@ -296,7 +296,7 @@ final class TeamsCompatibilityTests: XCTestCase {
             var environment = harness.environment
             if scenario == "lock_error" {
                 environment = MediaCommandEnvironment(isTrusted: { true }, acquireLock: {
-                    throw MicrophoneCommandError.lockUnavailable
+                    throw MediaCommandError.lockUnavailable
                 }, makeFocus: { harness.focus }, makeExposure: {
                     XCTFail("Must not set up without a lock")
                     return try TeamsAccessibilityExposure(client: harness.client)

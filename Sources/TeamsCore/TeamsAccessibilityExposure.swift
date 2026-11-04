@@ -23,13 +23,13 @@ final class TeamsAccessibilityExposure {
 
     init(client: any AccessibilityExposureClient) throws {
         guard let original = client.read() else {
-            throw MicrophoneCommandError.accessibilitySetupUnavailable
+            throw MediaCommandError.accessibilitySetupUnavailable
         }
         self.client = client
         self.original = original
 
         guard client.sameGeneration() == true else {
-            throw MicrophoneCommandError.accessibilitySetupUnavailable
+            throw MediaCommandError.accessibilitySetupUnavailable
         }
         guard !original else { return }
 
@@ -39,9 +39,9 @@ final class TeamsAccessibilityExposure {
         client.write(true)
         guard client.waitForValue(true) == .confirmed else {
             guard restore() else {
-                throw MicrophoneCommandError.accessibilityCleanupFailed
+                throw MediaCommandError.accessibilityCleanupFailed
             }
-            throw MicrophoneCommandError.accessibilitySetupUnavailable
+            throw MediaCommandError.accessibilitySetupUnavailable
         }
     }
 
@@ -97,7 +97,7 @@ private struct SystemAccessibilityExposureClient: AccessibilityExposureClient {
             .filter { !$0.isTerminated }
         guard applications.count == 1, let running = applications.first,
               let launched = running.launchDate else {
-            throw MicrophoneCommandError.accessibilitySetupUnavailable
+            throw MediaCommandError.accessibilitySetupUnavailable
         }
         pid = running.processIdentifier
         self.launched = launched

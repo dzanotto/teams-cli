@@ -8,7 +8,7 @@ final class MediaCommandLock {
 
     init(path: String = MediaCommandLock.defaultPath) throws {
         descriptor = open(path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
-        guard descriptor >= 0 else { throw MicrophoneCommandError.lockUnavailable }
+        guard descriptor >= 0 else { throw MediaCommandError.lockUnavailable }
         var metadata = stat()
         guard fstat(descriptor, &metadata) == 0,
               metadata.st_uid == getuid(),
@@ -16,13 +16,13 @@ final class MediaCommandLock {
               metadata.st_mode & mode_t(0o077) == 0 else {
             close(descriptor)
             descriptor = -1
-            throw MicrophoneCommandError.lockUnavailable
+            throw MediaCommandError.lockUnavailable
         }
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
             let busy = errno == EWOULDBLOCK
             close(descriptor)
             descriptor = -1
-            throw busy ? MicrophoneCommandError.commandInProgress : .lockUnavailable
+            throw busy ? MediaCommandError.commandInProgress : .lockUnavailable
         }
     }
 
