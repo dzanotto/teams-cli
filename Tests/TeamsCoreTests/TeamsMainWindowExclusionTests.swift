@@ -69,7 +69,7 @@ final class TeamsMainWindowExclusionTests: XCTestCase {
         let stub = AccessibilityReaderStub()
         mainWindow(stub, content: stub.node(children: (0..<500).map { _ in stub.node() }))
         stub.window([stub.button(), stub.button("hangup-button", label: "Leave")])
-        let expected = try TeamsAccessibilityReader(environment: stub.environment, excludeMainWindows: false).read()
+        let expected = try TeamsAccessibilityReader(environment: stub.environment, mode: .full).read()
         let fullCount = stub.traversed.count
         let actual = try stub.read()
         let fastCount = stub.traversed.count - fullCount
@@ -203,19 +203,68 @@ final class TeamsMainWindowExclusionTests: XCTestCase {
         XCTAssertEqual(try shared.read().handles[2]?.microphones, [pending])
     }
 
-    func testHandCallAndExplicitFullScansDoNotApplyTheMediaExclusion() throws {
-        for control in [MediaControl.microphone, .camera, .hand, .call] {
+    func testDiscoveryModesPreserveTraversalAndRecognitionPoliciesForEveryControl() throws {
+        for mode in [TeamsAccessibilityReader.DiscoveryMode.normal, .full, .audit] {
+            for control in [MediaControl.microphone, .camera, .hand, .call] {
+                let context = "\(mode), \(control)"
+                let stub = AccessibilityReaderStub()
+                let content = stub.node(children: [stub.button(control.rawValue)])
+                let main = mainWindow(stub, content: content)
+                // Keep the requested control visible in another window to avoid a retry.
+                let call = stub.window([stub.button(control.rawValue)])
+                let timings = CommandTimings(clock: { stub.now })
+                let reader = TeamsAccessibilityReader(environment: stub.environment, timings: timings, mode: mode)
+                let result = try reader.read(control: control)
+                let excludes = mode == .normal && (control == .microphone || control == .camera)
+                XCTAssertTrue(result.complete, context)
+                XCTAssertEqual(result.focusUnchanged, true, context)
+                XCTAssertEqual(result.windows.map(\.index), [1, 2], context)
+                XCTAssertEqual(result.handles[1]?.window, main, context)
+                XCTAssertEqual(result.handles[2]?.window, call, context)
+                XCTAssertEqual(stub.traversed.contains(content), !excludes, context)
+                XCTAssertEqual(result.handles[1]?.buttons(for: control).count, excludes ? 0 : 1, context)
+                XCTAssertEqual(result.handles[2]?.buttons(for: control).count, 1, context)
+                XCTAssertTrue(stub.sleeps.isEmpty, context)
+                let readsSearchIdentity = stub.batchReads.contains {
+                    $0.names.contains("AXDOMIdentifier") &&
+                        stub.values[$0.element]?[kAXRoleAttribute] as? String == "AXComboBox"
+                }
+                XCTAssertEqual(readsSearchIdentity, mode == .audit || excludes, context)
+                let discovery = try XCTUnwrap(timings.spans.first { $0.name == "discovery" })
+                let window = try XCTUnwrap(discovery.discoveryScans.first?.windows.first)
+                XCTAssertEqual(window.excludedMainWindow, excludes, context)
+                XCTAssertEqual(discovery.counters["excluded_main_windows"], excludes ? 1 : 0, context)
+                let recognition: TeamsMainWindowRecognition.Result? = mode == .audit ? .conflicting :
+                    (excludes ? .mainShell : nil)
+                XCTAssertEqual(window.mainWindowRecognition, recognition, context)
+            }
+        }
+    }
+
+    func testAuditRecognizesMainShellBeyondNormalNodeAndDepthLimitsWithoutExcludingIt() throws {
+        for limit in ["nodes", "depth"] {
             let stub = AccessibilityReaderStub()
-            let content = stub.node(children: [stub.button(control.rawValue)])
-            mainWindow(stub, content: content)
-            let reader = TeamsAccessibilityReader(environment: stub.environment,
-                                                 excludeMainWindows: control == .hand || control == .call)
-            let result = try reader.read(control: control)
-            XCTAssertTrue(result.complete)
-            XCTAssertTrue(stub.traversed.contains(content))
-            XCTAssertEqual(result.handles[1]?.buttons(for: control).count, 1)
-            XCTAssertFalse(stub.batchReads.contains { $0.names.contains("AXDOMIdentifier") &&
-                stub.values[$0.element]?[kAXRoleAttribute] as? String == "AXComboBox" })
+            let content = stub.node()
+            let main = mainWindow(stub, content: content)
+            let children = try XCTUnwrap(stub.values[main]?[kAXChildrenAttribute] as? [AXUIElement])
+            if limit == "nodes" {
+                let prefix = (0..<256).map { _ in stub.node() }
+                stub.values[main]?[kAXChildrenAttribute] = prefix + children
+            } else {
+                var shell = stub.node(children: children)
+                for _ in 0..<24 { shell = stub.node(children: [shell]) }
+                stub.values[main]?[kAXChildrenAttribute] = [shell]
+            }
+            stub.window([stub.button(), stub.button("hangup-button", label: "Leave")])
+            let timings = CommandTimings(clock: { stub.now })
+            let result = try TeamsAccessibilityReader(environment: stub.environment, timings: timings, mode: .audit).read()
+            XCTAssertTrue(result.complete, limit)
+            XCTAssertTrue(stub.traversed.contains(content), limit)
+            let discovery = try XCTUnwrap(timings.spans.first { $0.name == "discovery" })
+            let window = try XCTUnwrap(discovery.discoveryScans.first?.windows.first)
+            XCTAssertEqual(window.mainWindowRecognition, .mainShell, limit)
+            XCTAssertFalse(window.excludedMainWindow, limit)
+            XCTAssertEqual(discovery.counters["excluded_main_windows"], 0, limit)
         }
     }
 
@@ -225,7 +274,7 @@ final class TeamsMainWindowExclusionTests: XCTestCase {
         mainWindow(stub, content: content)
         let timings = CommandTimings(clock: { stub.now })
         let result = try TeamsAccessibilityReader(environment: stub.environment, timings: timings,
-                                                 auditMainWindows: true).read()
+                                                 mode: .audit).read()
         XCTAssertTrue(result.complete)
         XCTAssertTrue(stub.traversed.contains(content))
         let discovery = try XCTUnwrap(timings.spans.first { $0.name == "discovery" })

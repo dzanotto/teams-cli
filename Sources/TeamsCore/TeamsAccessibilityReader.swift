@@ -42,6 +42,15 @@ struct CallWindowHandles {
 
 /// Reads controls only: no activation, events, AX actions, attribute writes, or permission prompts.
 public final class TeamsAccessibilityReader {
+    enum DiscoveryMode {
+        /// Only microphone/camera reads may exclude a recognized main window.
+        case normal
+        /// Traverse all windows without main-window recognition.
+        case full
+        /// Traverse all windows and recognize main shells beyond the normal recognition limits.
+        case audit
+    }
+
     private let maxNodes = 12_000
     private let maxDepth = 80
     private let maxSeconds: TimeInterval = 8
@@ -49,17 +58,15 @@ public final class TeamsAccessibilityReader {
     private let mainWindowDepthLimit = 24
     private let environment: AccessibilityReaderEnvironment
     private let timings: CommandTimings?
-    private let auditMainWindows: Bool
-    private let excludeMainWindows: Bool
+    private let mode: DiscoveryMode
 
     public convenience init() { self.init(environment: .live) }
 
     init(environment: AccessibilityReaderEnvironment, timings: CommandTimings? = nil,
-         auditMainWindows: Bool = false, excludeMainWindows: Bool = true) {
+         mode: DiscoveryMode = .normal) {
         self.environment = environment
         self.timings = timings
-        self.auditMainWindows = auditMainWindows
-        self.excludeMainWindows = excludeMainWindows
+        self.mode = mode
     }
 
     public func read(control: MediaControl = .microphone, timeout: TimeInterval = 8) throws -> TeamsSnapshot {
@@ -133,7 +140,7 @@ public final class TeamsAccessibilityReader {
                 // Teams calls use separate windows. Only the known main shell is excluded;
                 // unfamiliar windows retain full discovery. Audit mode verifies this layout
                 // assumption with a full scan and never enables the early exit.
-                let canExcludeMainWindow = excludeMainWindows && !auditMainWindows &&
+                let canExcludeMainWindow = mode == .normal &&
                     (control == .microphone || control == .camera)
                 var windowComplete = true
                 var windowVisitedNodes = 0
@@ -174,7 +181,7 @@ public final class TeamsAccessibilityReader {
                     }
                     // Bound classification work to the shell prefix. Missing markers, errors,
                     // and call evidence fall back to the same traversal without restarting it.
-                    let probeMainWindow = auditMainWindows || (canExcludeMainWindow && windowComplete &&
+                    let probeMainWindow = mode == .audit || (canExcludeMainWindow && windowComplete &&
                         windowVisitedNodes <= mainWindowNodeLimit && depth <= mainWindowDepthLimit &&
                         !mainWindowRecognition.hasCallControls)
                     if probeMainWindow && role == "AXComboBox" {
@@ -204,7 +211,7 @@ public final class TeamsAccessibilityReader {
                             scanTimings?.markIncomplete()
                         }
                         let identifiers = identity.values.compactMap { $0 as? String }
-                        if auditMainWindows || canExcludeMainWindow {
+                        if mode == .audit || canExcludeMainWindow {
                             mainWindowRecognition.observe(role: role, identifiers: identifiers, complete: !identity.failed)
                         }
                         if let identifier = identifiers.first(where: {
@@ -261,7 +268,7 @@ public final class TeamsAccessibilityReader {
                     }
                 }
                 complete = complete && windowComplete
-                if auditMainWindows || canExcludeMainWindow {
+                if mode == .audit || canExcludeMainWindow {
                     scanTimings?.recordMainWindowRecognition(mainWindowRecognition)
                 }
                 snapshots.append(WindowSnapshot(index: snapshots.count + 1, controls: controls))

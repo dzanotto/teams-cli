@@ -41,7 +41,7 @@ struct TeamsCompatibilityProbe {
         let identity = processIdentity(apps[0].application)
         metadata["enhanced_accessibility_before_scan"] = enhancedAccessibility(apps[0].element)
         let timings = CommandTimings(clock: readerEnvironment.uptime)
-        let reader = TeamsAccessibilityReader(environment: readerEnvironment, timings: timings, auditMainWindows: true)
+        let reader = TeamsAccessibilityReader(environment: readerEnvironment, timings: timings, mode: .audit)
         let snapshot: TeamsSnapshot
         let scanStarted = readerEnvironment.uptime()
         do {
