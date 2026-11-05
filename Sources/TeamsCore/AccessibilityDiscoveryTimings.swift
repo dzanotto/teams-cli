@@ -79,12 +79,10 @@ final class AccessibilityDiscoveryTimings {
 
     func finish(complete: Bool) { scan.complete = complete }
 
-    func markIncomplete() { scan.windows[windowIndex].complete = false }
-
-    func excludeMainWindow() { scan.windows[windowIndex].excludedMainWindow = true }
-
-    func recordMainWindowRecognition(_ recognition: TeamsMainWindowRecognition) {
-        scan.windows[windowIndex].mainWindowRecognition = scan.windows[windowIndex].complete ? recognition.result : .incomplete
+    func recordWindowEvidence(_ evidence: WindowDiscoveryEvidence) {
+        scan.windows[windowIndex].complete = evidence.complete
+        scan.windows[windowIndex].excludedMainWindow = evidence.excludedMainWindow
+        scan.windows[windowIndex].mainWindowRecognition = evidence.mainWindowRecognition
     }
 
     /// Each visited node belongs to one bucket. Descendants split off at the first two forks;

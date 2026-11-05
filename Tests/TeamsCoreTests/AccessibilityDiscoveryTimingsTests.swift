@@ -174,7 +174,7 @@ final class AccessibilityDiscoveryTimingsTests: XCTestCase {
         stub.applications.append(stub.application(other))
         stub.singleErrors[other] = .cannotComplete
         let timings = CommandTimings(clock: { stub.now })
-        XCTAssertThrowsError(try TeamsAccessibilityReader(environment: stub.environment, timings: timings).read())
+        XCTAssertThrowsError(try TeamsAccessibilityReader(environment: stub.environment, timings: timings).readWithEvidence())
         let discovery = try XCTUnwrap(timings.spans.first { $0.name == "discovery" })
         let scan = try XCTUnwrap(discovery.discoveryScans.first)
         XCTAssertTrue(discovery.threw)
@@ -182,6 +182,8 @@ final class AccessibilityDiscoveryTimingsTests: XCTestCase {
         XCTAssertEqual(scan.windows.count, 1)
         XCTAssertTrue(scan.windows[0].complete)
         XCTAssertEqual(scan.windows[0].visitedNodes, 2)
+        XCTAssertEqual(scan.windows[0].mainWindowRecognition, .callSurface)
+        XCTAssertFalse(scan.windows[0].excludedMainWindow)
     }
 
     func testNodeAndDepthLimitsRemainIncompleteWithProfilingEnabled() throws {

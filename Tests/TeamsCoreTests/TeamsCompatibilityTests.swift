@@ -108,6 +108,34 @@ final class TeamsCompatibilityTests: XCTestCase {
         XCTAssertTrue(stub.traversed.contains(deep))
     }
 
+    func testLayoutCheckUsesOnlyTheFinalRetryEvidence() {
+        for initiallyConflicting in [false, true] {
+            let stub = healthyTree()
+            let windows = stub.values[stub.root]?[kAXWindowsAttribute] as! [AXUIElement]
+            let main = windows[0]
+            let call = windows[1]
+            let mainChildren = stub.values[main]?[kAXChildrenAttribute] as! [AXUIElement]
+            let callChildren = stub.values[call]?[kAXChildrenAttribute] as! [AXUIElement]
+            let conflictingChildren = mainChildren + [stub.button("video-button", label: "Turn camera on")]
+            stub.values[main]?[kAXChildrenAttribute] = initiallyConflicting ? conflictingChildren : mainChildren
+            // Missing hand control triggers a retry, while the initial scan remains complete.
+            let initialCallChildren = callChildren.filter {
+                stub.values[$0]?["AXDOMIdentifier"] as? String != "raisehands-button"
+            }
+            stub.values[call]?[kAXChildrenAttribute] = initialCallChildren
+            stub.onSleep = {
+                stub.values[call]?[kAXChildrenAttribute] = callChildren
+                stub.values[main]?[kAXChildrenAttribute] = initiallyConflicting ? mainChildren : conflictingChildren
+            }
+            let report = probe(stub).run(metadata: [:])
+            XCTAssertEqual(stub.sleeps, [0.25])
+            XCTAssertEqual(check(report, "main_window_layout").outcome, initiallyConflicting ? .pass : .fail)
+            XCTAssertEqual(check(report, "main_window_layout").reason,
+                           initiallyConflicting ? "separate_call_layout" : "main_shell_contains_call_controls")
+            XCTAssertEqual(report.outcome, initiallyConflicting ? .pass : .fail)
+        }
+    }
+
     func testFocusChangeOrMissingFocusIsInconclusive() {
         for focus in [ReaderFocusSnapshot(pid: 2, window: AXUIElementCreateApplication(55)),
                       ReaderFocusSnapshot(pid: nil, window: nil)] {

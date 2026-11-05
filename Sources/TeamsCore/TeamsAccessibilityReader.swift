@@ -70,19 +70,23 @@ public final class TeamsAccessibilityReader {
     }
 
     public func read(control: MediaControl = .microphone, timeout: TimeInterval = 8) throws -> TeamsSnapshot {
+        try readWithEvidence(control: control, timeout: timeout).snapshot
+    }
+
+    func readWithEvidence(control: MediaControl = .microphone, timeout: TimeInterval = 8) throws -> DiscoveryResult {
         try timings.measure("discovery") {
             timings?.increment("visited_nodes", by: 0)
             timings?.increment("attribute_calls", by: 0)
             timings?.increment("batch_attribute_calls", by: 0)
             timings?.increment("scan_attempts", by: 0)
             timings?.increment("excluded_main_windows", by: 0)
-            let snapshot = try discover(control: control, timeout: timeout)
-            timings?.detail("complete", String(snapshot.complete))
-            return snapshot
+            let result = try discover(control: control, timeout: timeout)
+            timings?.detail("complete", String(result.snapshot.complete))
+            return result
         }
     }
 
-    private func discover(control: MediaControl, timeout: TimeInterval) throws -> TeamsSnapshot {
+    private func discover(control: MediaControl, timeout: TimeInterval) throws -> DiscoveryResult {
         guard environment.isTrusted() else { throw TeamsReadError.accessibilityDenied }
         let apps = environment.runningApplications("com.microsoft.teams2")
         guard !apps.isEmpty else { throw TeamsReadError.notRunning }
@@ -100,20 +104,24 @@ public final class TeamsAccessibilityReader {
         }
 
         var result = try scan(apps, control: control, deadline: deadline)
+        var scans = [result.evidence]
         // The web tree can appear asynchronously after the role query. Retry once without
         // changing focus or enabling screen-reader mode. The scan itself is bounded.
-        if environment.uptime() + 0.25 < deadline && result.complete && !result.windows.contains(where: { window in
+        if environment.uptime() + 0.25 < deadline && result.snapshot.complete && !result.snapshot.windows.contains(where: { window in
             window.controls.contains(where: { $0.identifier == control.rawValue })
         }) {
             timings.measure("discovery_retry_wait") { environment.sleep(0.25) }
             result = try scan(apps, control: control, deadline: deadline)
+            scans.append(result.evidence)
         }
-        return TeamsSnapshot(windows: result.windows, complete: result.complete,
-                             focusUnchanged: focusBefore.matches(timings.measure("reader_focus_check", environment.captureFocus)),
-                             handles: result.handles)
+        let snapshot = TeamsSnapshot(windows: result.snapshot.windows, complete: result.snapshot.complete,
+                                     focusUnchanged: focusBefore.matches(timings.measure("reader_focus_check", environment.captureFocus)),
+                                     handles: result.snapshot.handles)
+        return DiscoveryResult(snapshot: snapshot, scans: scans)
     }
 
-    private func scan(_ apps: [AccessibilityReaderApplication], control: MediaControl, deadline: TimeInterval) throws -> TeamsSnapshot {
+    private func scan(_ apps: [AccessibilityReaderApplication], control: MediaControl, deadline: TimeInterval) throws
+        -> (snapshot: TeamsSnapshot, evidence: DiscoveryScanEvidence) {
         timings?.increment("scan_attempts")
         let scanTimings = timings?.makeDiscoveryTimings()
         defer {
@@ -124,6 +132,7 @@ public final class TeamsAccessibilityReader {
         var complete = true
         var snapshots: [WindowSnapshot] = []
         var handles: [Int: CallWindowHandles] = [:]
+        var windowEvidence: [WindowDiscoveryEvidence] = []
 
         for app in apps {
             let root = app.element
@@ -143,6 +152,7 @@ public final class TeamsAccessibilityReader {
                 let canExcludeMainWindow = mode == .normal &&
                     (control == .microphone || control == .camera)
                 var windowComplete = true
+                var excludedMainWindow = false
                 var windowVisitedNodes = 0
                 var controls: [ControlSnapshot] = []
                 var windowHandles = CallWindowHandles(application: app.application, window: window)
@@ -151,13 +161,11 @@ public final class TeamsAccessibilityReader {
                     queue.append((window, 0, 0))
                 } else {
                     windowComplete = false
-                    scanTimings?.markIncomplete()
                 }
                 var cursor = 0
                 while cursor < queue.count {
                     guard visited.count < maxNodes, environment.uptime() < deadline else {
                         windowComplete = false
-                        scanTimings?.markIncomplete()
                         break
                     }
                     let (node, depth, branch) = queue[cursor]
@@ -171,13 +179,11 @@ public final class TeamsAccessibilityReader {
                                             group: "node_attributes", scanTimings: scanTimings, branch: branch)
                     if fields.failed {
                         windowComplete = false
-                        scanTimings?.markIncomplete()
                     }
                     let role = fields.values[0] as? String ?? ""
                     scanTimings?.recordRole(role, branch: branch)
                     if role.isEmpty {
                         windowComplete = false
-                        scanTimings?.markIncomplete()
                     }
                     // Bound classification work to the shell prefix. Missing markers, errors,
                     // and call evidence fall back to the same traversal without restarting it.
@@ -195,7 +201,6 @@ public final class TeamsAccessibilityReader {
                                               scanTimings: scanTimings, branch: branch)
                         if text.failed {
                             windowComplete = false
-                            scanTimings?.markIncomplete()
                         }
                         let indicator = ControlSnapshot(role: role, identifier: "", label: text.values[0] as? String ?? "")
                         if OwnVideoHandIndicator.matches(indicator) {
@@ -208,7 +213,6 @@ public final class TeamsAccessibilityReader {
                                                   group: "button_identifiers", scanTimings: scanTimings, branch: branch)
                         if identity.failed {
                             windowComplete = false
-                            scanTimings?.markIncomplete()
                         }
                         let identifiers = identity.values.compactMap { $0 as? String }
                         if mode == .audit || canExcludeMainWindow {
@@ -222,7 +226,6 @@ public final class TeamsAccessibilityReader {
                                                   group: "control_labels", scanTimings: scanTimings, branch: branch)
                             if text.failed {
                                 windowComplete = false
-                                scanTimings?.markIncomplete()
                             }
                             scanTimings?.recordControl(identifier, branch: branch)
                             let label = text.values.compactMap { $0 as? String }.first(where: { !$0.isEmpty }) ?? ""
@@ -237,27 +240,24 @@ public final class TeamsAccessibilityReader {
                         mainWindowRecognition.result == .mainShell {
                         guard environment.uptime() < deadline else {
                             windowComplete = false
-                            scanTimings?.markIncomplete()
                             break
                         }
                         // Discard only the unvisited queue belonging to this window. Its
                         // prefix still counts toward the scan budget; later windows are fresh.
                         for (pending, _, _) in queue[cursor...] { scheduled.remove(pending) }
                         timings?.increment("excluded_main_windows")
-                        scanTimings?.excludeMainWindow()
+                        excludedMainWindow = true
                         break
                     }
                     let children = fields.values[1] as? [AXUIElement] ?? []
                     if depth >= maxDepth {
                         if !children.isEmpty {
                             windowComplete = false
-                            scanTimings?.markIncomplete()
                         }
                     } else {
                         for child in children where !scheduled.contains(child) {
                             guard scheduled.count < maxNodes else {
                                 windowComplete = false
-                                scanTimings?.markIncomplete()
                                 break
                             }
                             scheduled.insert(child)
@@ -268,15 +268,20 @@ public final class TeamsAccessibilityReader {
                     }
                 }
                 complete = complete && windowComplete
-                if mode == .audit || canExcludeMainWindow {
-                    scanTimings?.recordMainWindowRecognition(mainWindowRecognition)
-                }
+                let recognition: TeamsMainWindowRecognition.Result? = mode == .audit || canExcludeMainWindow ?
+                    (windowComplete ? mainWindowRecognition.result : .incomplete) : nil
+                let evidence = WindowDiscoveryEvidence(window: snapshots.count + 1, complete: windowComplete,
+                                                       mainWindowRecognition: recognition,
+                                                       excludedMainWindow: excludedMainWindow)
+                windowEvidence.append(evidence)
+                scanTimings?.recordWindowEvidence(evidence)
                 snapshots.append(WindowSnapshot(index: snapshots.count + 1, controls: controls))
                 handles[snapshots.count] = windowHandles
             }
         }
         scanTimings?.finish(complete: complete)
-        return TeamsSnapshot(windows: snapshots, complete: complete, focusUnchanged: nil, handles: handles)
+        return (TeamsSnapshot(windows: snapshots, complete: complete, focusUnchanged: nil, handles: handles),
+                DiscoveryScanEvidence(complete: complete, windows: windowEvidence))
     }
 
     private func attributes(_ element: AXUIElement, _ names: [String], group: String,

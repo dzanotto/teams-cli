@@ -40,14 +40,13 @@ struct TeamsCompatibilityProbe {
         guard trusted, apps.count == 1 else { return report() }
         let identity = processIdentity(apps[0].application)
         metadata["enhanced_accessibility_before_scan"] = enhancedAccessibility(apps[0].element)
-        let timings = CommandTimings(clock: readerEnvironment.uptime)
-        let reader = TeamsAccessibilityReader(environment: readerEnvironment, timings: timings, mode: .audit)
-        let snapshot: TeamsSnapshot
+        let reader = TeamsAccessibilityReader(environment: readerEnvironment, mode: .audit)
+        let discovery: DiscoveryResult
         let scanStarted = readerEnvironment.uptime()
         do {
             // Hand discovery includes all four buttons and the self-video hand indicator.
             // Audit mode disables main-window exclusion and inspects all shell markers.
-            snapshot = try reader.read(control: .hand)
+            discovery = try reader.readWithEvidence(control: .hand)
         } catch {
             scanMS = (readerEnvironment.uptime() - scanStarted) * 1_000
             let reason: String
@@ -60,6 +59,7 @@ struct TeamsCompatibilityProbe {
             return report()
         }
         scanMS = (readerEnvironment.uptime() - scanStarted) * 1_000
+        let snapshot = discovery.snapshot
         set("inspection", snapshot.complete ? .pass : .inconclusive,
             snapshot.complete ? "complete_full_scan" : "inspection_incomplete")
         if let focus = snapshot.focusUnchanged {
@@ -73,7 +73,7 @@ struct TeamsCompatibilityProbe {
         set("call_selection", selectionReason == nil ? .pass : .inconclusive, selectionReason ?? "one_active_call")
 
         // Only the final scan describes the returned snapshot; earlier retry attempts may be empty.
-        let windows = timings.spans.flatMap(\.discoveryScans).last?.windows ?? []
+        let windows = discovery.scans.last?.windows ?? []
         if !snapshot.complete || windows.contains(where: { $0.mainWindowRecognition == .incomplete }) {
             set("main_window_layout", .inconclusive, "inspection_incomplete")
         } else if windows.contains(where: { $0.mainWindowRecognition == .conflicting }) {
