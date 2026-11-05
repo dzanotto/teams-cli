@@ -5,8 +5,11 @@
     "Sources/TeamsCore/AccessibilityExposureReadiness.swift",
     "Sources/TeamsCore/CallEndController.swift",
     "Sources/TeamsCore/CallStatusSupport.swift",
+    "Sources/TeamsCore/FocusMonitor.swift",
     "Sources/TeamsCore/MediaActionController.swift",
-    "Sources/TeamsCore/NativeMediaBackend.swift"
+    "Sources/TeamsCore/NativeMediaBackend.swift",
+    "Sources/TeamsCore/TeamsAccessibilityExposure.swift",
+    "Sources/TeamsCore/TeamsMediaCommandSupport.swift"
   ],
   "operators": [
     "NegateConditional",

@@ -191,3 +191,40 @@ diff whitespace checks. No production Swift behavior changed and no live Teams
 actions were performed. The mutation result applies only to the configured files
 and operators; it does not establish live compatibility or exhaustive fault
 detection.
+
+## Shared lifecycle and focus mutation scope — 2026-11-05
+
+The report-only allowlist expanded from five to eight files, adding
+`TeamsAccessibilityExposure.swift`, `TeamsMediaCommandSupport.swift`, and
+`FocusMonitor.swift`. The operators, test target, timeouts, and single-worker
+configuration remained unchanged. The completed run accounted for 210 mutations:
+194 killed, one survivor, 13 with no coverage, and two compile errors. There were
+no timeouts or activation warnings. The reported score was 93.27%, excluding
+compile errors but retaining the survivor and uncovered mutations in its
+denominator. Elapsed runner time was 205.77 seconds.
+
+The activated survivor changes `baseline.pid == nil || baseline.window == nil`
+to use `&&` in `FocusMonitorState` initialization. It was assessed as equivalent
+within the current monitor lifecycle: before initialization finishes, the
+window-registration branch independently marks every incomplete baseline as
+inconclusive. The state is private, and callers cannot observe it before that
+branch runs. Existing tests already exercise complete baselines and each
+incomplete combination. The survivor remains visible in the report; no
+implementation changes or artificial tests were added to eliminate it.
+
+The 13 uncovered mutations identify native adapter testability gaps: four in
+the focused-window AX read and nine in the system accessibility-exposure client
+(process selection/generation, Boolean writes, and typed reads). The automated
+tests inject fake clients and do not reach these native paths. They remain in
+the allowlist and score; addressing them requires separate adapter test seams.
+
+The compile errors are the existing readiness-loop negation and a mutation of
+the generic constraint `Focus == FocusMonitor` into invalid `Focus != FocusMonitor`
+syntax. Neither is a test failure in the unchanged source.
+
+Reports, per-mutant logs, and the exact input snapshot are retained under
+`.build/mutation-testing/runs/20261105T162104Z-oqfeze_r/`. Source/test hashes and
+the configuration were checked against this completed run. All 536 automated
+tests (487 core and 49 CLI), the release build, and diff whitespace checks passed.
+Only mutation configuration and documentation changed. No live Teams actions
+were performed, and these results do not establish live platform compatibility.
