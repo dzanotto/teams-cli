@@ -163,3 +163,31 @@ or Teams versions. They measure Teams-reported state and command completion, not
 audio/video delivery. Automated validation passed 500 tests and a release build;
 combined source line coverage was 87.93%. No live hand or call-end actions were
 part of this comparison.
+
+## Mutation scope expansion — 2026-11-05
+
+The local report-only mutation check expanded from two to five files, adding
+`NativeMediaBackend.swift`, `CallEndController.swift`, and `CallStatusSupport.swift`
+with the existing five operators and `TeamsCoreTests` target. Discovery produced
+156 mutations. The first completed run killed 154, left one survivor, and reported
+one compile error.
+
+The survivor changed the native backend's read-budget guard from `remaining > 0`
+to `remaining >= 0`, allowing an Accessibility read exactly at the deadline.
+A regression test now checks refusal at and after the deadline without another
+read or press. The final run identified that test as the killer of the previously
+surviving mutation, with activation evidence.
+
+The final run killed all 155 executable mutations, with zero survivors, timeouts,
+uncovered mutations, or activation warnings. The remaining compile error was the
+existing `while true` conditional-negation mutation in
+`AccessibilityExposureReadiness.swift`; it was excluded from the score.
+Elapsed runner time was 168.85 seconds on this local run. Reports and the exact
+input snapshot are retained under
+`.build/mutation-testing/runs/20261105T160312Z-d1x9ri55/`.
+
+All 536 automated tests (487 core and 49 CLI) passed, as did the release build and
+diff whitespace checks. No production Swift behavior changed and no live Teams
+actions were performed. The mutation result applies only to the configured files
+and operators; it does not establish live compatibility or exhaustive fault
+detection.

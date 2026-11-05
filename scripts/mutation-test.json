@@ -3,7 +3,10 @@
   "archive_sha256": "4adfd721e9154603e173ef13bb71b0b0ab4b166afa210f58382046f6ff1d4a96",
   "source_files": [
     "Sources/TeamsCore/AccessibilityExposureReadiness.swift",
-    "Sources/TeamsCore/MediaActionController.swift"
+    "Sources/TeamsCore/CallEndController.swift",
+    "Sources/TeamsCore/CallStatusSupport.swift",
+    "Sources/TeamsCore/MediaActionController.swift",
+    "Sources/TeamsCore/NativeMediaBackend.swift"
   ],
   "operators": [
     "NegateConditional",

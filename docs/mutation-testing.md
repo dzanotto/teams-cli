@@ -13,12 +13,18 @@ The runner copies the current sources and tests, including uncommitted edits,
 into a temporary workspace and removes it on completion or handled interruption.
 It does not install a global tool or change the package's dependencies.
 
-The allowlist in [`scripts/mutation-test.json`](../scripts/mutation-test.json) covers
-`MediaActionController.swift` and `AccessibilityExposureReadiness.swift`, using
-five mutation operators and only `TeamsCoreTests`. New source files are excluded
-until added to that allowlist. Runs use one worker, explicit test/build/run
-timeouts, and no result cache. To invoke it from another directory, use the path
-to the wrapper script.
+The allowlist in [`scripts/mutation-test.json`](../scripts/mutation-test.json) covers:
+
+- `MediaActionController.swift`: shared media-action selection and verification.
+- `AccessibilityExposureReadiness.swift`: bounded accessibility readiness polling.
+- `NativeMediaBackend.swift`: target identity and checks immediately before dispatch.
+- `CallEndController.swift`: call selection and verified window closure.
+- `CallStatusSupport.swift`: shared call eligibility and control-label matching.
+
+It uses five mutation operators and only `TeamsCoreTests`. New source files are
+excluded until added to that allowlist. Runs use one worker, explicit
+test/build/run timeouts, and no result cache. To invoke it from another directory,
+use the path to the wrapper script.
 
 Each invocation prints a new directory under `.build/mutation-testing/runs/`
 containing HTML/JSON reports, the mutation plan, per-mutant test logs, toolchain

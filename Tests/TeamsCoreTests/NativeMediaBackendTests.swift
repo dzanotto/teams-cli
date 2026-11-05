@@ -222,6 +222,22 @@ final class NativeMediaBackendTests: XCTestCase {
         XCTAssertEqual(client.presses, 0)
     }
 
+    func testExpiredReadBudgetRejectsSampleWithoutReadingAndInvalidatesPreflight() throws {
+        for uptime in [8.0, 8.1] {
+            let client = FakeMediaAccessibility([mic(.unmuted)])
+            let backend = native(client)
+            let initial = try backend.sample()
+            client.uptime = uptime
+
+            XCTAssertThrowsError(try backend.sample())
+            XCTAssertEqual(client.readCount, 1)
+            assertRejected("preflight_failed") {
+                try backend.press(targetID: initial.targetID!, expectedState: .unmuted)
+            }
+            XCTAssertEqual(client.presses, 0)
+        }
+    }
+
     func testVerificationStillRejectsReplacementCallAfterPress() throws {
         let client = FakeMediaAccessibility([mic(.unmuted), mic(.unmuted), mic(.muted, window: 20)])
         let result = try MicrophoneController(backend: adapter(client)).toggle()

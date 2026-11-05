@@ -127,7 +127,7 @@ def summarize(report, plan):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run the report-only, two-file mutation check using an isolated package copy.",
+        description="Run the report-only, scoped mutation check using an isolated package copy.",
         epilog="Requires Apple Silicon macOS 15+, Python 3.9+, and a working Swift/Xcode toolchain. "
                "The first run downloads the pinned tool. Reports are saved under .build/mutation-testing/runs/.")
     parser.parse_args()
