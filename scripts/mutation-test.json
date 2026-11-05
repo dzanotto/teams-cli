@@ -1,0 +1,18 @@
+{
+  "tool_version": "1.7.0",
+  "archive_sha256": "4adfd721e9154603e173ef13bb71b0b0ab4b166afa210f58382046f6ff1d4a96",
+  "source_files": [
+    "Sources/TeamsCore/AccessibilityExposureReadiness.swift",
+    "Sources/TeamsCore/MediaActionController.swift"
+  ],
+  "operators": [
+    "NegateConditional",
+    "LogicalOperatorReplacement",
+    "SwapTernary",
+    "RelationalOperatorReplacement",
+    "ArithmeticOperatorReplacement"
+  ],
+  "test_timeout_seconds": 10,
+  "build_timeout_seconds": 180,
+  "run_timeout_seconds": 900
+}
