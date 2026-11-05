@@ -141,6 +141,19 @@ final class MicrophoneControllerTests: XCTestCase {
         XCTAssertEqual(backend.presses.count, 1)
     }
 
+    func testToggleDoesNotWaitOrReadWhenPressExhaustsVerificationBudget() throws {
+        for initial in [MicrophoneState.muted, .unmuted] {
+            let backend = FakeMicrophoneBackend([observed(initial), observed(initial)])
+            backend.pressDuration = backend.verificationTimeRemaining
+
+            assertUncertain(try MicrophoneController(backend: backend).toggle(), reason: "verification_timeout")
+            XCTAssertEqual(backend.verificationTimeRemaining, 0)
+            XCTAssertEqual(backend.presses.count, 1)
+            XCTAssertEqual(backend.sampleCount, 2)
+            XCTAssertEqual(backend.waitCount, 0)
+        }
+    }
+
     func testToggleTimeoutAndUncertainPressAreNeverRetried() throws {
         let timeout = FakeMicrophoneBackend([observed(.muted)])
         assertUncertain(try MicrophoneController(backend: timeout).toggle(), reason: "verification_timeout")
@@ -475,6 +488,8 @@ private final class FakeMicrophoneBackend: MicrophoneBackend {
     var sampleErrorAt: Int?
     var throwOnPress = false
     var rejectionReason: String?
+    var pressDuration: TimeInterval = 0
+    private var elapsedPressTime: TimeInterval = 0
 
     init(_ observations: [MicrophoneObservation], focusValues: [Bool?] = [true]) {
         self.observations = observations
@@ -492,6 +507,7 @@ private final class FakeMicrophoneBackend: MicrophoneBackend {
         presses.append(Press(targetID: targetID, expectedState: expectedState))
         if let rejectionReason { throw MicrophonePressRejected(reason: rejectionReason) }
         if throwOnPress { throw Failure.expected }
+        elapsedPressTime += pressDuration
     }
 
     func focusPreserved() -> Bool? {
@@ -500,6 +516,6 @@ private final class FakeMicrophoneBackend: MicrophoneBackend {
         return focusValues[min(index, focusValues.count - 1)]
     }
 
-    var verificationTimeRemaining: TimeInterval { max(0, 8 - Double(waitCount) * 0.05) }
+    var verificationTimeRemaining: TimeInterval { max(0, 8 - elapsedPressTime - Double(waitCount) * 0.05) }
     func waitForUpdate() { waitCount += 1 }
 }
