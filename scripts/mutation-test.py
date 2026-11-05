@@ -108,7 +108,10 @@ def summarize(report, plan):
     if {name.lstrip("/") for name in report["files"]} != planned_files:
         raise RuntimeError("Report files do not match the mutation plan")
     mutants = [m for file in report["files"].values() for m in file["mutants"]]
-    if len(mutants) != len(plan["mutants"]):
+    planned = Counter((m["file"], m["fingerprint"]) for m in plan["mutants"])
+    reported = Counter((name.lstrip("/"), m["fingerprint"])
+                       for name, file in report["files"].items() for m in file["mutants"])
+    if planned != reported or any(count != 1 for count in planned.values()):
         raise RuntimeError("The report does not account for every planned mutation")
     counts = Counter(m["status"] for m in mutants)
     if counts.keys() - {"Killed", "Survived", "CompileError", "Timeout", "NoCoverage"}:
@@ -123,6 +126,18 @@ def summarize(report, plan):
         "integrity_warnings": sum(m["status"] in ("Killed", "Timeout") and not m.get("activated")
                                   for m in mutants),
     }
+
+
+def read_report(reports):
+    plan_path = reports / "plan.json"
+    plan = json.loads(plan_path.read_text())
+    report = json.loads((reports / "mutation-report.json").read_text())
+    if report["config"]["planSha256"] != digest(plan_path):
+        raise RuntimeError("Report plan checksum does not match this run")
+    html = reports / "mutation-report.html"
+    if not html.is_file() or not html.stat().st_size:
+        raise RuntimeError("Missing or empty HTML mutation report")
+    return summarize(report, plan)
 
 
 def main():
@@ -180,7 +195,7 @@ def main():
             write_json(reports / "run.json", metadata)
             print(f"Running {len(plan['mutants'])} mutations; output: {reports / 'run.log'}", flush=True)
             run(command, project, reports / "run.log", config["run_timeout_seconds"], environment)
-            result = summarize(json.loads((reports / "mutation-report.json").read_text()), plan)
+            result = read_report(reports)
             write_json(reports / "summary.json", result)
             metadata["status"] = "completed"
             print(json.dumps(result, indent=2), flush=True)

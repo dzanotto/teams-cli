@@ -1,0 +1,66 @@
+name: Mutation testing
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * 1' # Mondays at 04:17 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-testing-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    name: Report mutations (arm64)
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify unchanged baseline
+        id: baseline
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          mkdir -p .build/mutation-testing
+          {
+            test "$(uname -m)" = arm64
+            python3 -B -m unittest discover -s scripts/tests -v
+            swift --version
+            swift test
+          } 2>&1 | tee .build/mutation-testing/baseline.log
+      - name: Run report-only mutation tests
+        id: mutations
+        timeout-minutes: 20
+        shell: bash
+        run: bash scripts/mutation-test.sh 2>&1 | tee .build/mutation-testing/runner.log
+      - name: Validate reports and summarize results
+        if: always()
+        env:
+          BASELINE_OUTCOME: ${{ steps.baseline.outcome }}
+          MUTATION_OUTCOME: ${{ steps.mutations.outcome }}
+        shell: bash
+        run: |
+          mkdir -p .build/mutation-testing
+          python3 scripts/mutation-ci-summary.py \
+            --baseline-outcome "$BASELINE_OUTCOME" \
+            --mutation-outcome "$MUTATION_OUTCOME" \
+            | tee .build/mutation-testing/ci-summary.md "$GITHUB_STEP_SUMMARY"
+      - name: Upload mutation reports and logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: mutation-testing-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .build/mutation-testing/runs/
+            .build/mutation-testing/*.log
+            .build/mutation-testing/ci-summary.md
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
