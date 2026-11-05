@@ -7,7 +7,7 @@ This dependency-free Swift package targets macOS 13+ and requires Swift 6+.
 - `Sources/TeamsCore/`: Accessibility readers, state classifiers, control-specific controllers, and shared action/focus handling.
 - `Tests/TeamsCoreTests/`: XCTest suites with fake backends and scripted Accessibility observations.
 - `Tests/TeamsCLITests/`: CLI contracts with fake command handlers and executable smoke tests.
-- `Package.swift`: package targets; `README.md`: command contracts and validation evidence. Build artifacts belong in ignored `.build/`; there is no asset directory.
+- `Package.swift`: package targets; `README.md`: installation, usage, and command contracts; `docs/`: detailed guides and validation history. Build artifacts belong in ignored `.build/`; there is no asset directory.
 
 ## Build, Test, and Development Commands
 
@@ -29,6 +29,12 @@ Use XCTest classes named `<Feature>Tests` and descriptive `test...` methods. Exe
 ## Commit & Pull Request Guidelines
 
 History uses concise imperative subjects, such as `Add hand toggle command with verified state changes`; follow that style. Keep commits focused. PRs should explain the behavior change, relevant issues, checks run, and remaining limitations. Update `README.md` and CLI help when commands, JSON, or exit codes change.
+
+## Documentation Guidelines
+
+Keep `README.md` focused on installation, usage, current behavior, limitations, and basic development commands. Preserve command, JSON, exit-code, focus, and uncertain-outcome contracts when simplifying it. Keep testing instructions brief: commands, prerequisites, and links to configuration or guides.
+
+Do not add individual test or mutation-run results, dates, scores, counts, durations, survivor histories, log/report paths, diagnostic schemas, or implementation history to the README. Put reusable technical details in the relevant guide under `docs/`; historical validation evidence belongs in `docs/validation.md` when worth retaining. Keep generated logs and reports in ignored `.build/`.
 
 ## Accessibility & Action Safety
 
