@@ -84,6 +84,30 @@ final class AccessibilityExposureReadinessTests: XCTestCase {
         XCTAssertEqual(backend.time, 0.4, accuracy: 0.000_001)
     }
 
+    func testMatchingReadAtExactDeadlineConfirmsWithoutWaiting() {
+        for expected in [true, false] {
+            let backend = FakeExposureReadiness(values: [expected])
+            backend.readDuration = 0.4
+            XCTAssertEqual(backend.poller.waitFor(expected), .confirmed)
+            XCTAssertEqual(backend.time, 0.4, accuracy: 0.000_001)
+            XCTAssertEqual(backend.readTimes, [0])
+            XCTAssertTrue(backend.waits.isEmpty)
+        }
+    }
+
+    func testNonmatchingOrUnavailableReadAtExactDeadlineTimesOutWithoutWaiting() {
+        for expected in [true, false] {
+            for value: Bool? in [!expected, nil] {
+                let backend = FakeExposureReadiness(values: [value])
+                backend.readDuration = 0.4
+                XCTAssertEqual(backend.poller.waitFor(expected), .timedOut)
+                XCTAssertEqual(backend.time, 0.4, accuracy: 0.000_001)
+                XCTAssertEqual(backend.readTimes, [0])
+                XCTAssertTrue(backend.waits.isEmpty)
+            }
+        }
+    }
+
     func testSlowReadCannotConfirmReadinessAfterDeadline() {
         let backend = FakeExposureReadiness(values: [true])
         backend.readDuration = 0.5

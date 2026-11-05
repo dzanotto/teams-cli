@@ -280,22 +280,23 @@ final class MicrophoneControllerTests: XCTestCase {
     }
 
     func testControllerRejectsInconsistentAssessmentInsteadOfTrustingKnownOverallState() throws {
-        let cases = [
-            MicrophoneAssessment(state: .muted, reason: nil, windows: []),
-            MicrophoneAssessment(state: .muted, reason: nil, windows: [
+        let cases: [(MicrophoneAssessment, String)] = [
+            (MicrophoneAssessment(state: .muted, reason: nil, windows: []), "no_call_controls"),
+            (MicrophoneAssessment(state: .muted, reason: nil, windows: [
                 WindowMicrophoneStatus(window: 1, state: .muted),
                 WindowMicrophoneStatus(window: 2, state: .muted),
-            ]),
-            MicrophoneAssessment(state: .muted, reason: nil, windows: [
+            ]), "multiple_call_windows"),
+            (MicrophoneAssessment(state: .muted, reason: nil, windows: [
                 WindowMicrophoneStatus(window: 1, state: .unknown),
-            ]),
+            ]), "microphone_state_unavailable"),
         ]
-        for assessment in cases {
+        for (assessment, reason) in cases {
             let backend = FakeMicrophoneBackend([
                 MicrophoneObservation(assessment: assessment, targetID: "call-a", canPress: true),
             ])
             let result = try MicrophoneController(backend: backend).set(.muted)
             XCTAssertFalse(result.success)
+            XCTAssertEqual(result.reason, reason)
             XCTAssertFalse(result.actionAttempted)
             XCTAssertTrue(backend.presses.isEmpty)
         }
