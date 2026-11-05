@@ -67,7 +67,7 @@ struct MonitoredFocus {
 
     static func capture() -> MonitoredFocus {
         capture(frontmostPID: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
-                focusedWindow: readFocusedWindow)
+                focusedWindow: { readFocusedWindow(pid: $0) })
     }
 
     static func capture(frontmostPID: () -> pid_t?, focusedWindow: (pid_t) -> AXUIElement?) -> MonitoredFocus {
@@ -82,11 +82,10 @@ struct MonitoredFocus {
         return MonitoredFocus(pid: pid, window: window)
     }
 
-    private static func readFocusedWindow(pid: pid_t) -> AXUIElement? {
-        let application = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(application, 0.25)
-        var rawWindow: CFTypeRef?
-        let error = AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &rawWindow)
+    static func readFocusedWindow(pid: pid_t, attributes: AccessibilityAttributeClient = .live) -> AXUIElement? {
+        let application = attributes.makeApplication(pid)
+        attributes.setMessagingTimeout(application, 0.25)
+        let (rawWindow, error) = attributes.copyAttribute(application, kAXFocusedWindowAttribute)
         guard error == .success, let rawWindow, CFGetTypeID(rawWindow) == AXUIElementGetTypeID() else {
             return nil
         }

@@ -228,3 +228,37 @@ the configuration were checked against this completed run. All 536 automated
 tests (487 core and 49 CLI), the release build, and diff whitespace checks passed.
 Only mutation configuration and documentation changed. No live Teams actions
 were performed, and these results do not establish live platform compatibility.
+
+## Native adapter mutation gaps — 2026-11-05
+
+The accessibility-exposure adapter now accepts process lookup, AX attribute
+calls, and virtual time through an injected environment. The focused-window
+reader uses the same attribute-call interface. Process selection, generation
+checks, native Boolean conversion, error/type checks, and readiness readback
+remain in the production adapters and are exercised by fake native results.
+Live defaults retain the existing AX calls, polling limits, and timeout reset.
+
+Twelve additional tests cover zero/one/multiple eligible processes, missing
+launch identity, terminated or replaced processes, valid and invalid typed
+reads, exact Boolean writes, and all readiness outcomes. Integration cases
+check a setter error after an applied write, a successful setter without an
+applied write, and process replacement during readiness readback. Every case
+uses local identity tokens and scripted results; no live Teams access occurs.
+
+The mutation scope and operators are unchanged: 210 mutations across eight
+files. All 13 previously uncovered mutations were killed by the new tests with
+activation evidence. The completed run reports 207 killed, the same equivalent
+focus-initialization survivor, two compile errors, zero uncovered mutations,
+zero timeouts, and zero activation warnings. The reported score is 99.52%; the
+survivor remains visible and the two invalid mutations are excluded. Elapsed
+runner time was 196.71 seconds. Reports and the exact input snapshot are under
+`.build/mutation-testing/runs/20261105T164346Z-cpnsu2xf/`; source/test hashes and
+the configuration were checked against the completed run.
+
+All 548 automated tests (499 core and 49 CLI), the release build, and diff
+whitespace checks passed. Combined production source line coverage was 89.83%
+(2,801 of 3,118 lines), including the unexercised live forwarding files. Detailed
+coverage output is retained in `.build/native-adapter-coverage.json`. The tests
+validate adapter decisions, not the live AppKit/Accessibility forwarding layer
+or Teams compatibility. The suite remains report-only, and the equivalent
+survivor's production logic was left unchanged.

@@ -87,49 +87,51 @@ final class TeamsAccessibilityExposure {
     deinit { restore() }
 }
 
-private struct SystemAccessibilityExposureClient: AccessibilityExposureClient {
+struct SystemAccessibilityExposureClient: AccessibilityExposureClient {
     let pid: pid_t
     let launched: Date
     let application: AXUIElement
+    private let environment: AccessibilityExposureEnvironment
 
-    init() throws {
-        let applications = NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.teams2")
+    init(environment: AccessibilityExposureEnvironment = .live) throws {
+        let applications = environment.runningApplications("com.microsoft.teams2")
             .filter { !$0.isTerminated }
         guard applications.count == 1, let running = applications.first,
               let launched = running.launchDate else {
             throw MediaCommandError.accessibilitySetupUnavailable
         }
-        pid = running.processIdentifier
+        pid = running.pid
         self.launched = launched
-        application = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(application, 0.25)
+        self.environment = environment
+        application = environment.attributes.makeApplication(pid)
+        environment.attributes.setMessagingTimeout(application, 0.25)
     }
 
     func write(_ value: Bool) {
-        _ = AXUIElementSetAttributeValue(
-            application, "AXEnhancedUserInterface" as CFString, value ? kCFBooleanTrue : kCFBooleanFalse
+        _ = environment.attributes.setAttribute(
+            application, "AXEnhancedUserInterface", value ? kCFBooleanTrue : kCFBooleanFalse
         )
     }
 
     func waitForValue(_ expected: Bool) -> AccessibilityExposureReadiness.Result {
         // Later setup/cleanup reads retain the usual per-message timeout.
-        defer { AXUIElementSetMessagingTimeout(application, 0.25) }
+        defer { environment.attributes.setMessagingTimeout(application, 0.25) }
         return AccessibilityExposureReadiness(sameGeneration: sameGeneration, read: { timeout in
-            AXUIElementSetMessagingTimeout(self.application, Float(timeout))
+            self.environment.attributes.setMessagingTimeout(self.application, Float(timeout))
             return self.read()
-        }).waitFor(expected)
+        }, now: environment.now, wait: environment.wait).waitFor(expected)
     }
 
     func sameGeneration() -> Bool? {
-        guard let running = NSRunningApplication(processIdentifier: pid) else { return false }
+        guard let running = environment.runningApplication(pid) else { return false }
         guard !running.isTerminated else { return false }
         guard let currentLaunch = running.launchDate else { return nil }
         return currentLaunch == launched
     }
 
     func read() -> Bool? {
-        var raw: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(application, "AXEnhancedUserInterface" as CFString, &raw) == .success,
+        let (raw, error) = environment.attributes.copyAttribute(application, "AXEnhancedUserInterface")
+        guard error == .success,
               let raw, CFGetTypeID(raw) == CFBooleanGetTypeID() else { return nil }
         return raw as? Bool
     }

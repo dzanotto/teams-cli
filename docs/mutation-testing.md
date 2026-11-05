@@ -20,9 +20,10 @@ The allowlist in [`scripts/mutation-test.json`](../scripts/mutation-test.json) c
 - `NativeMediaBackend.swift`: target identity and checks immediately before dispatch.
 - `CallEndController.swift`: call selection and verified window closure.
 - `CallStatusSupport.swift`: shared call eligibility and control-label matching.
-- `TeamsAccessibilityExposure.swift`: accessibility restoration and process-generation checks.
+- `TeamsAccessibilityExposure.swift`: accessibility restoration, native Boolean conversion,
+  and process-generation checks.
 - `TeamsMediaCommandSupport.swift`: lock lifetime, cleanup ordering, and finalization outcomes.
-- `FocusMonitor.swift`: focus-change tracking and inconclusive observations.
+- `FocusMonitor.swift`: focus-change tracking, inconclusive observations, and typed window reads.
 
 It uses five mutation operators and only `TeamsCoreTests`. New source files are
 excluded until added to that allowlist. Runs use one worker, explicit
@@ -39,9 +40,11 @@ excluded from the mutation score; per-mutant timeouts and missing activation
 evidence remain visible in the summary.
 
 Review survivors for observable behavior changes before adding tests. Redundant
-guards can produce equivalent mutations. Native macOS adapter paths that the
-fake-backend tests do not exercise remain visible as `NoCoverage`; they require
-separate testability work and are not evidence of verified platform behavior.
+guards can produce equivalent mutations. Adapter tests inject process lookup,
+attribute calls, and virtual time below the selection, type-validation, and
+readback logic. This exercises those decisions without accessing Teams or changing
+desktop focus. The thin live forwarding layer still requires platform validation.
+Any unexercised mutations remain visible as `NoCoverage`.
 
 There is no CI mutation gate. A score applies only to the configured files and
 operators, and does not establish live Teams compatibility.
