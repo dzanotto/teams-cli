@@ -145,8 +145,9 @@ final class MediaVerificationTimingTests: XCTestCase {
             XCTAssertEqual(client.uptime, 107.95, accuracy: 0.000_001)
             let verification = Array(client.reads.dropFirst(2))
             XCTAssertEqual(verification.count, 2)
-            XCTAssertEqual(verification[0].timeout, 0.1, accuracy: 0.000_001)
-            XCTAssertEqual(verification[1].timeout, 0.05, accuracy: 0.000_001)
+            for (read, expectedTimeout) in zip(verification, [0.1, 0.05]) {
+                XCTAssertEqual(read.timeout, expectedTimeout, accuracy: 0.000_001)
+            }
             XCTAssertEqual(client.pressed, [command.button])
             harness.assertFinalized()
         }
