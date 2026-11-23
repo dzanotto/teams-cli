@@ -30,6 +30,10 @@ Line Tools or Xcode are required. Generated binaries, module cache, and the defa
 report stay in ignored `.build/teams-compatibility/`. Old cached binaries can be
 removed by deleting that directory, which also removes reports saved there.
 
+The script prints progress to stderr with elapsed seconds, including fingerprint
+checks, cache reuse or compilation, checkout metadata collection, and diagnostic
+startup. These messages also appear with `--json`; stdout remains the JSON report.
+
 The check prints a readable summary and writes
 `.build/teams-compatibility/latest.json`. Use `--json` for JSON on stdout and
 `--output FILE` to choose the report destination. Custom destination directories
