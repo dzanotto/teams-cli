@@ -49,10 +49,12 @@ Any unexercised mutations remain visible as `NoCoverage`.
 ## CI reports
 
 The dedicated [Mutation testing workflow](../.github/workflows/mutation-testing.yml)
-runs manually with `workflow_dispatch` and weekly on Mondays at 04:17 UTC. It uses
-the same `macos-15` ARM runner and Xcode selection as the ARM job in regular CI.
-Scheduled runs use the default branch; manual runs can select a branch after the
-workflow is available on the default branch.
+runs manually with `workflow_dispatch` and weekly on Mondays at 04:17 UTC. It
+defaults to the same `macos-15` ARM runner and Xcode selection as regular CI.
+Manual runs on `main` can select `arm64_runner: self-hosted`; see
+[runner selection and prerequisites](ci.md). Scheduled runs stay GitHub-hosted
+and use the default branch. Hosted manual runs can select another branch after
+the workflow is available on the default branch.
 
 The job first runs the full, unchanged `swift test` baseline, then invokes the
 same scoped mutation runner as the local command. A baseline failure prevents
@@ -62,7 +64,8 @@ overall run, and missing, malformed, or incomplete reports fail the job. Report
 validation checks the plan checksum, each planned mutation's file and fingerprint,
 terminal statuses, a nonempty HTML report, and agreement with the saved summary.
 
-The job summary and artifact upload run even after a failed step. The summary
+After a successful checkout, the job summary and artifact upload run even after
+a failed test or mutation step. The summary
 shows baseline/run outcomes, status counts, score, and activation warnings, or
 explains why complete results are unavailable. The artifact retains available
 HTML/JSON reports, the plan, metadata, input snapshot, baseline/runner logs, and

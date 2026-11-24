@@ -2,6 +2,15 @@ name: Mutation testing
 
 on:
   workflow_dispatch:
+    inputs:
+      arm64_runner:
+        description: ARM64 runner (self-hosted requires main)
+        type: choice
+        required: true
+        default: github-hosted
+        options:
+          - github-hosted
+          - self-hosted
   schedule:
     - cron: '17 4 * * 1' # Mondays at 04:17 UTC
 
@@ -15,12 +24,36 @@ concurrency:
 jobs:
   mutation:
     name: Report mutations (arm64)
-    runs-on: macos-15
+    runs-on: >-
+      ${{ inputs.arm64_runner == 'self-hosted' && github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/main' && fromJSON('["self-hosted", "macOS", "ARM64"]') || 'macos-15' }}
     timeout-minutes: 30
     env:
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      ARM64_RUNNER: ${{ inputs.arm64_runner || 'github-hosted' }}
+      DEVELOPER_DIR: >-
+        ${{ inputs.arm64_runner == 'self-hosted' &&
+            (vars.SELF_HOSTED_DEVELOPER_DIR || '/Applications/Xcode.app/Contents/Developer') ||
+            '/Applications/Xcode_16.4.app/Contents/Developer' }}
     steps:
+      - name: Validate runner selection and select Xcode
+        shell: bash
+        run: |
+          case "$ARM64_RUNNER" in
+            github-hosted) ;;
+            self-hosted)
+              if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$GITHUB_REF" != refs/heads/main ]]; then
+                echo '::error::Self-hosted runners are available only for manual runs on main.'
+                exit 1
+              fi
+              ;;
+            *) echo '::error::ARM64 runner must be github-hosted or self-hosted.'; exit 1 ;;
+          esac
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          swift_bin=$(xcrun --find swift)
+          dirname "$swift_bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        id: checkout
         with:
           persist-credentials: false
       - name: Verify unchanged baseline
@@ -41,7 +74,7 @@ jobs:
         shell: bash
         run: bash scripts/mutation-test.sh 2>&1 | tee .build/mutation-testing/runner.log
       - name: Validate reports and summarize results
-        if: always()
+        if: always() && steps.checkout.outcome == 'success'
         env:
           BASELINE_OUTCOME: ${{ steps.baseline.outcome }}
           MUTATION_OUTCOME: ${{ steps.mutations.outcome }}
@@ -53,7 +86,7 @@ jobs:
             --mutation-outcome "$MUTATION_OUTCOME" \
             | tee .build/mutation-testing/ci-summary.md "$GITHUB_STEP_SUMMARY"
       - name: Upload mutation reports and logs
-        if: always()
+        if: always() && steps.checkout.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mutation-testing-${{ github.run_id }}-${{ github.run_attempt }}

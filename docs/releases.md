@@ -10,9 +10,11 @@ required: the publishing job uses the built-in `GITHUB_TOKEN` with
 `contents: write`; build and test jobs have read-only repository access.
 
 CI runs on pull requests and pushes to `main`. The release workflow reuses the
-same CI workflow from the tagged commit. Both select Xcode 16.4 on `macos-15`
+same CI workflow from the tagged commit. Hosted runs select Xcode 16.4 on `macos-15`
 (Apple Silicon) and `macos-15-intel`; update these selections together when the
 hosted runner images retire the selected tools. Actions are pinned to commit IDs.
+Manual CI also supports a [self-hosted ARM64 runner choice](ci.md); tag-triggered
+releases retain the hosted defaults and require both architectures.
 
 ## Publish a version
 

@@ -4,8 +4,23 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      arm64_runner:
+        description: ARM64 runner (self-hosted requires main; Intel stays GitHub-hosted)
+        type: choice
+        required: true
+        default: github-hosted
+        options:
+          - github-hosted
+          - self-hosted
   workflow_call:
     inputs:
+      arm64_runner:
+        description: ARM64 runner; self-hosted is allowed only for manual runs on main
+        type: string
+        required: false
+        default: github-hosted
       release_tag:
         description: Stable version tag to package after validation
         type: string
@@ -22,7 +37,10 @@ concurrency:
 jobs:
   build:
     name: Test and build (${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
+    runs-on: >-
+      ${{ matrix.arch == 'arm64' && inputs.arm64_runner == 'self-hosted' &&
+          github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+          fromJSON('["self-hosted", "macOS", "ARM64"]') || matrix.runner }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -33,10 +51,31 @@ jobs:
           - runner: macos-15-intel
             arch: x86_64
     env:
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      ARM64_RUNNER: ${{ inputs.arm64_runner || 'github-hosted' }}
+      DEVELOPER_DIR: >-
+        ${{ matrix.arch == 'arm64' && inputs.arm64_runner == 'self-hosted' &&
+            (vars.SELF_HOSTED_DEVELOPER_DIR || '/Applications/Xcode.app/Contents/Developer') ||
+            '/Applications/Xcode_16.4.app/Contents/Developer' }}
       EXPECTED_ARCH: ${{ matrix.arch }}
       RELEASE_TAG: ${{ inputs.release_tag }}
     steps:
+      - name: Validate runner selection and select Xcode
+        shell: bash
+        run: |
+          case "$ARM64_RUNNER" in
+            github-hosted) ;;
+            self-hosted)
+              if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$GITHUB_REF" != refs/heads/main ]]; then
+                echo '::error::Self-hosted runners are available only for manual runs on main.'
+                exit 1
+              fi
+              ;;
+            *) echo '::error::ARM64 runner must be github-hosted or self-hosted.'; exit 1 ;;
+          esac
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          swift_bin=$(xcrun --find swift)
+          dirname "$swift_bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false

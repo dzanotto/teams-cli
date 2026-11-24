@@ -332,6 +332,8 @@ GitHub Actions runs the automated tests, a release build, CLI help and version,
 and an archive smoke check on pull requests and pushes to `main`, using native Apple Silicon and
 Intel macOS runners with Xcode 16.4. This does not validate live Teams behavior or
 runtime compatibility with every supported macOS version.
+Manual CI and mutation runs can select a self-hosted ARM64 runner; see the
+[CI runner guide](docs/ci.md) for setup and usage.
 
 Pushing a stable version tag such as `v0.1.0` runs the same checks on the tagged
 commit and publishes both archives, `SHA256SUMS`, and generated release notes to
