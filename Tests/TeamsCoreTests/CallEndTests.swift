@@ -3,25 +3,31 @@ import XCTest
 
 final class CallEndTests: XCTestCase {
     func testLeaveLabelsAndShortcutSuffixesAreRecognized() {
-        for label in ["Leave", "Hang up", "  LEAVE  ", "Leave (⌘⇧H)", "Esci", "Abbandona"] {
-            let assessment = CallEndClassifier.assess([call(1, label: label)], complete: true)
-            XCTAssertEqual(assessment.state, .active, label)
-            XCTAssertNil(assessment.reason, label)
+        for role in ["AXButton", "AXPopUpButton"] {
+            for label in ["Leave", "Hang up", "  LEAVE  ", "Leave (⌘⇧H)", "Esci", "Abbandona"] {
+                let assessment = CallEndClassifier.assess([call(1, label: label, role: role)], complete: true)
+                XCTAssertEqual(assessment.state, .active, label)
+                XCTAssertNil(assessment.reason, label)
+            }
         }
     }
 
     func testEndForEveryoneAndUnknownLabelsAreNotPressed() {
-        for label in ["End meeting", "End meeting for all", "Leave everyone", "Leave (all)", "", "Call"] {
-            let assessment = CallEndClassifier.assess([call(1, label: label)], complete: true)
-            XCTAssertEqual(assessment.state, .unknown, label)
-            XCTAssertEqual(assessment.reason, "unrecognized_hangup_label", label)
+        for role in ["AXButton", "AXPopUpButton"] {
+            for label in ["End meeting", "End meeting for all", "Leave everyone", "Leave (all)", "", "Call"] {
+                let assessment = CallEndClassifier.assess([call(1, label: label, role: role)], complete: true)
+                XCTAssertEqual(assessment.state, .unknown, label)
+                XCTAssertEqual(assessment.reason, "unrecognized_hangup_label", label)
+            }
         }
     }
 
-    func testExactButtonRoleAndIdentifierAreRequired() {
+    func testSupportedRoleAndExactIdentifierAreRequired() {
         for control in [
             ControlSnapshot(role: "AXStaticText", identifier: "hangup-button", label: "Leave"),
+            ControlSnapshot(role: "AXMenuButton", identifier: "hangup-button", label: "Leave"),
             ControlSnapshot(role: "AXButton", identifier: "hangup-button-menu", label: "Leave"),
+            ControlSnapshot(role: "AXPopUpButton", identifier: "hangup-button-more-options", label: "Leave"),
             ControlSnapshot(role: "AXButton", identifier: "microphone-button", label: "Leave"),
         ] {
             let assessment = CallEndClassifier.assess([WindowSnapshot(index: 1, controls: [control])], complete: true)
@@ -38,6 +44,21 @@ final class CallEndTests: XCTestCase {
         let twoCalls = CallEndClassifier.assess([call(1), call(2)], complete: true)
         XCTAssertEqual(twoCalls.state, .ambiguous)
         XCTAssertEqual(twoCalls.reason, "multiple_call_windows")
+    }
+
+    func testMixedLeaveRolesPreserveAmbiguityHoldAndIncompleteReadRules() {
+        let button = call(1)
+        let popup = call(2, role: "AXPopUpButton")
+        let duplicate = WindowSnapshot(index: 1, controls: button.controls + popup.controls)
+        XCTAssertEqual(CallEndClassifier.assess([duplicate], complete: true).reason, "multiple_hangup_controls")
+        XCTAssertEqual(CallEndClassifier.assess([button, popup], complete: true).reason, "multiple_call_windows")
+        XCTAssertEqual(CallEndClassifier.assess([popup], complete: false).reason, "inspection_incomplete")
+        let held = call(2, held: true, role: "AXPopUpButton")
+        let selection = CallEndClassifier.assess([button, held], complete: true)
+        XCTAssertEqual(selection.state, .active)
+        XCTAssertEqual(selection.windows, [WindowCallStatus(window: 1, state: .active)])
+        XCTAssertEqual(selection.excludedWindows, [ExcludedWindow(window: 2, reason: "on_hold")])
+        XCTAssertEqual(CallEndClassifier.assess([held], complete: true).reason, "all_calls_on_hold")
     }
 
     func testHeldCallsAreExcludedWithoutUsingMediaState() {
@@ -297,8 +318,8 @@ final class CallEndTests: XCTestCase {
         CallEndClassifier.assess(windows, complete: complete)
     }
 
-    private func call(_ index: Int, label: String = "Leave", held: Bool = false) -> WindowSnapshot {
-        var controls = [ControlSnapshot(role: "AXButton", identifier: "hangup-button", label: label)]
+    private func call(_ index: Int, label: String = "Leave", held: Bool = false, role: String = "AXButton") -> WindowSnapshot {
+        var controls = [ControlSnapshot(role: role, identifier: "hangup-button", label: label)]
         if held { controls.append(ControlSnapshot(role: "AXButton", identifier: "resume-button", label: "Resume")) }
         return WindowSnapshot(index: index, controls: controls)
     }

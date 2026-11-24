@@ -1,5 +1,17 @@
 import Foundation
 
+/// Teams exposes the primary Leave control as either a button or a popup button.
+/// Keep the exact identifier requirement so adjacent menu controls cannot match.
+enum HangupControl {
+    static func matches(role: String, identifier: String) -> Bool {
+        identifier == "hangup-button" && (role == "AXButton" || role == "AXPopUpButton")
+    }
+
+    static func matches(_ control: ControlSnapshot) -> Bool {
+        matches(role: control.role, identifier: control.identifier)
+    }
+}
+
 /// The same call eligibility rules apply to media controls and leaving a call.
 struct CallWindowSelection {
     let active: [WindowSnapshot]
@@ -7,7 +19,7 @@ struct CallWindowSelection {
 
     init(_ windows: [WindowSnapshot]) {
         let calls = windows.filter { window in
-            window.controls.contains { $0.role == "AXButton" && $0.identifier == "hangup-button" }
+            window.controls.contains(where: HangupControl.matches)
         }
         func isHeld(_ window: WindowSnapshot) -> Bool {
             window.controls.contains { $0.role == "AXButton" && $0.identifier == "resume-button" }

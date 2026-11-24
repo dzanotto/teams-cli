@@ -25,10 +25,11 @@ struct TeamsMainWindowRecognition {
             failed = true
             return
         }
+        hasCallControls = hasCallControls || identifiers.contains { HangupControl.matches(role: role, identifier: $0) }
         if role == "AXButton" {
             hasProfile = hasProfile || identifiers.contains("idna-me-control-avatar-trigger")
             hasCallControls = hasCallControls || identifiers.contains {
-                ["microphone-button", "video-button", "hangup-button", "resume-button", "raisehands-button"].contains($0)
+                ["microphone-button", "video-button", "resume-button", "raisehands-button"].contains($0)
             }
         } else if role == "AXComboBox" {
             hasSearch = hasSearch || identifiers.contains("ms-searchux-input")

@@ -21,6 +21,27 @@ final class AccessibilityCallEndBackendTests: XCTestCase {
         XCTAssertEqual(client.controls, Array(repeating: .call, count: 5))
     }
 
+    func testPopupLeaveRequiresTwoClosureObservationsAndDoesNotRetryAnUnchangedWindow() throws {
+        for closes in [false, true] {
+            let popup = call(role: "AXPopUpButton")
+            let client = CallEndAccessibilityStub([popup, popup, popup, closes ? closed() : popup])
+            client.attributes[kAXRoleAttribute] = "AXPopUpButton"
+            let result = try CallEndController(backend: backend(client)).end()
+            XCTAssertEqual(client.pressedElements, [AXUIElementCreateApplication(11)])
+            XCTAssertEqual(client.readCountAtPress, 3)
+            XCTAssertEqual(result.success, closes)
+            if closes {
+                XCTAssertEqual(result.state, .ended)
+                XCTAssertEqual(result.changed, true)
+                XCTAssertEqual(client.waitCount, 2)
+                XCTAssertEqual(client.readCount, 5)
+            } else {
+                assertUncertain(result, reason: "verification_timeout")
+                XCTAssertEqual(client.waitCount, 20)
+            }
+        }
+    }
+
     func testWindowReorderingPreservesPinnedTargetAndSameCallEvidence() throws {
         let client = CallEndAccessibilityStub([call(), call(index: 4)])
         let native = backend(client)
@@ -102,13 +123,17 @@ final class AccessibilityCallEndBackendTests: XCTestCase {
     func testDirectButtonReadRejectsChangedRoleIdentifierAndLeaveLabel() throws {
         let changes = [
             ["AXRole": "AXStaticText"], ["AXDOMIdentifier": "end-for-everyone"],
+            ["AXDOMIdentifier": "hangup-button-more-options"],
             ["AXDescription": "End meeting for all"], ["AXDescription": ""]
         ]
-        for change in changes {
-            let client = CallEndAccessibilityStub([call()])
-            client.attributes.merge(change) { _, new in new }
-            assertRefused(try CallEndController(backend: backend(client)).end(), reason: "unrecognized_hangup_label")
-            XCTAssertTrue(client.pressedElements.isEmpty)
+        for role in ["AXButton", "AXPopUpButton"] {
+            for change in changes {
+                let client = CallEndAccessibilityStub([call(role: role)])
+                client.attributes[kAXRoleAttribute] = role
+                client.attributes.merge(change) { _, new in new }
+                assertRefused(try CallEndController(backend: backend(client)).end(), reason: "unrecognized_hangup_label")
+                XCTAssertTrue(client.pressedElements.isEmpty)
+            }
         }
     }
 
@@ -341,8 +366,9 @@ final class AccessibilityCallEndBackendTests: XCTestCase {
     }
 
     private func call(index: Int = 1, window: pid_t = 10, buttons: [pid_t] = [11],
-                      held: Bool = false, label: String = "Leave", complete: Bool = true) -> TeamsSnapshot {
-        var controls = buttons.map { _ in ControlSnapshot(role: "AXButton", identifier: "hangup-button", label: label) }
+                      held: Bool = false, label: String = "Leave", complete: Bool = true,
+                      role: String = "AXButton") -> TeamsSnapshot {
+        var controls = buttons.map { _ in ControlSnapshot(role: role, identifier: "hangup-button", label: label) }
         if held { controls.append(ControlSnapshot(role: "AXButton", identifier: "resume-button", label: "Resume")) }
         let handles = CallWindowHandles(application: .current, window: AXUIElementCreateApplication(window),
                                         hangups: buttons.map(AXUIElementCreateApplication))

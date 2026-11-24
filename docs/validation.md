@@ -28,6 +28,26 @@ reflect Teams' UI, not physical capture or receipt by other participants.
 
 ## Diagnostic findings
 
+### Popup Leave control — 2026-11-24
+
+On Teams 26289.204.5281.6363, the active call exposed `hangup-button` as
+`AXPopUpButton`, while microphone and camera controls remained `AXButton`.
+The installed CLI 0.1.4 and the unmodified checkout returned `no_call_controls`:
+discovery ignored the popup Leave control, which call selection requires.
+
+After accepting both Leave roles with the exact identifier, the rebuilt release
+recognized call window 2. Read-only status commands reported microphone `unmuted`
+and camera `on`, both with exit 0 and `focus_unchanged: true`. Hand status still
+returned `own_video_missing` (exit 2), reflecting the separately required self-video
+tile. No controls were pressed and no enhanced Accessibility setup was performed;
+popup Leave action behavior remains unverified live.
+
+The automated suite passed 555 tests, the release build passed, and combined
+TeamsCore/TeamsCLI line coverage was 89.88%. Regression tests cover popup discovery,
+native role preservation, identifier fallback, adjacent menu exclusion, held and
+ambiguous calls, main-shell recognition, final Leave validation, and simulated
+presses requiring two closure observations without retrying an unchanged window.
+
 ### Microphone press without a verified change
 
 The initial live `mic mute` dispatched one `AXPress`, but the microphone remained

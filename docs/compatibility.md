@@ -93,6 +93,14 @@ through inspection. A process restart invalidates the structural/state evidence.
 The full scan also covers content skipped by normal microphone/camera discovery;
 call controls inside a recognized main shell fail its layout assumption.
 
+Call discovery recognizes the exact `hangup-button` identifier with either the
+`AXButton` or `AXPopUpButton` role. Both forms participate in call selection,
+held-call exclusion, duplicate detection, and Leave-label validation. Adjacent
+controls such as `hangup-button-more-options` do not match. Other media controls
+retain their existing role requirements. Recognition alone does not establish
+what a popup control's `AXPress` will do; call end still requires the pinned window
+to disappear in two consecutive complete observations before reporting success.
+
 No call, only held calls, multiple active calls, missing self-video, a closed or
 unrecognized main shell, incomplete reads, disabled controls, unavailable focus,
 and changed focus are inconclusive. A disabled button can reflect meeting policy

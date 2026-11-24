@@ -20,6 +20,26 @@ final class TeamsCompatibilityTests: XCTestCase {
         XCTAssertNoThrow(try report.validateBaseline())
     }
 
+    func testPopupLeavePassesCallDiscoveryWhileMissingOwnVideoRemainsInconclusive() throws {
+        for hasOwnVideo in [true, false] {
+            let stub = healthyTree()
+            let window = callWindow(stub)
+            var children = try XCTUnwrap(stub.values[window]?[kAXChildrenAttribute] as? [AXUIElement])
+            let leave = try XCTUnwrap(children.first { stub.values[$0]?["AXDOMIdentifier"] as? String == "hangup-button" })
+            stub.values[leave]?[kAXRoleAttribute] = "AXPopUpButton"
+            if !hasOwnVideo { children.removeLast() }
+            stub.values[window]?[kAXChildrenAttribute] = children
+            let report = probe(stub).run(metadata: [:])
+            XCTAssertEqual(check(report, "call_selection").reason, "one_active_call")
+            XCTAssertEqual(check(report, "mic_state").state, "unmuted")
+            XCTAssertEqual(check(report, "camera_state").state, "off")
+            XCTAssertEqual(check(report, "call_state").state, "active")
+            XCTAssertEqual(check(report, "call_press").outcome, .pass)
+            XCTAssertEqual(report.outcome, hasOwnVideo ? .pass : .inconclusive)
+            if !hasOwnVideo { XCTAssertEqual(check(report, "hand_state").reason, "own_video_missing") }
+        }
+    }
+
     func testNoCallHeldCallsAndMultipleCallsAreInconclusiveAndNeverInspectCapabilities() {
         for scenario in ["none", "held", "multiple", "incomplete"] {
             let stub = healthyTree()

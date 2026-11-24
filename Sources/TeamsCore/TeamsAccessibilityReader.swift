@@ -208,7 +208,7 @@ public final class TeamsAccessibilityReader {
                             windowHandles.ownVideos.append(node)
                         }
                     }
-                    if role == "AXButton" {
+                    if role == "AXButton" || role == "AXPopUpButton" {
                         let identity = attributes(node, ["AXDOMIdentifier", kAXIdentifierAttribute],
                                                   group: "button_identifiers", scanTimings: scanTimings, branch: branch)
                         if identity.failed {
@@ -219,8 +219,10 @@ public final class TeamsAccessibilityReader {
                             mainWindowRecognition.observe(role: role, identifiers: identifiers, complete: !identity.failed)
                         }
                         if let identifier = identifiers.first(where: {
-                            ["microphone-button", "video-button", "hangup-button", "resume-button"].contains($0) ||
-                                (control == .hand && $0 == MediaControl.hand.rawValue)
+                            HangupControl.matches(role: role, identifier: $0) ||
+                                (role == "AXButton" &&
+                                    (["microphone-button", "video-button", "resume-button"].contains($0) ||
+                                        (control == .hand && $0 == MediaControl.hand.rawValue)))
                         }) {
                             let text = attributes(node, [kAXDescriptionAttribute, kAXTitleAttribute, kAXHelpAttribute],
                                                   group: "control_labels", scanTimings: scanTimings, branch: branch)

@@ -31,16 +31,14 @@ enum CallEndClassifier {
         if let reason = selection.failureReason(complete: complete) {
             return result(reason == "multiple_call_windows" ? .ambiguous : .unknown, reason)
         }
-        let buttons = selection.active[0].controls.filter {
-            $0.role == "AXButton" && $0.identifier == "hangup-button"
-        }
+        let buttons = selection.active[0].controls.filter(HangupControl.matches)
         guard buttons.count == 1 else { return result(.ambiguous, "multiple_hangup_controls") }
         guard isLeaveButton(buttons[0]) else { return result(.unknown, "unrecognized_hangup_label") }
         return result(.active, nil)
     }
 
     static func isLeaveButton(_ control: ControlSnapshot) -> Bool {
-        control.role == "AXButton" && control.identifier == "hangup-button" &&
+        HangupControl.matches(control) &&
             ["Leave", "Hang up", "Esci", "Abbandona"].contains { ControlLabel.matches(control.label, action: $0.lowercased()) }
     }
 }

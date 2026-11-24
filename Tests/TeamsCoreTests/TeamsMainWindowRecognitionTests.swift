@@ -39,6 +39,22 @@ final class TeamsMainWindowRecognitionTests: XCTestCase {
         }
     }
 
+    func testPopupLeaveConflictsWithShellMarkersButOtherPopupsDoNotIdentifyCallsOrProfiles() {
+        for callFirst in [false, true] {
+            var recognition = TeamsMainWindowRecognition()
+            recognition.observe(role: "AXPopUpButton", identifiers: ["idna-me-control-avatar-trigger", "microphone-button",
+                                                                     "video-button", "resume-button", "raisehands-button",
+                                                                     "hangup-button-more-options"])
+            XCTAssertEqual(recognition.result, .unknown)
+            if callFirst { recognition.observe(role: "AXPopUpButton", identifiers: ["hangup-button"]) }
+            recognition.observe(role: "AXComboBox", identifiers: ["ms-searchux-input"])
+            XCTAssertEqual(recognition.result, callFirst ? .callSurface : .unknown)
+            recognition.observe(role: "AXButton", identifiers: ["idna-me-control-avatar-trigger"])
+            if !callFirst { recognition.observe(role: "AXPopUpButton", identifiers: ["hangup-button"]) }
+            XCTAssertEqual(recognition.result, .conflicting)
+        }
+    }
+
     func testCallSurfaceDoesNotRequireAMainShellMarker() {
         var recognition = TeamsMainWindowRecognition()
         recognition.observe(role: "AXButton", identifiers: ["hangup-button"])

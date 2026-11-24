@@ -84,6 +84,51 @@ final class TeamsAccessibilityReaderTests: XCTestCase {
         XCTAssertTrue(stub.sleeps.isEmpty)
     }
 
+    func testPopupLeavePreservesNativeRoleAndEnablesAllCallClassifiers() throws {
+        for control in [MediaControl.microphone, .camera, .hand, .call] {
+            let stub = AccessibilityReaderStub()
+            let hangup = stub.node("AXPopUpButton", attributes: [
+                "AXDOMIdentifier": "hangup-button", kAXDescriptionAttribute: "Leave"
+            ])
+            let moreOptions = stub.node("AXPopUpButton", attributes: [
+                "AXDOMIdentifier": "hangup-button-more-options", kAXDescriptionAttribute: "Leave"
+            ])
+            stub.window([stub.button(label: "Unmute mic"), stub.button("video-button", label: "Turn camera off"),
+                         stub.button("raisehands-button", label: "Raise"), hangup, moreOptions,
+                         stub.node("AXImage", attributes: [kAXDescriptionAttribute: "Myself video, Test User, Video is on, Has context menu"])])
+            let result = try stub.read(control: control)
+            XCTAssertTrue(result.complete)
+            XCTAssertEqual(result.handles[1]?.hangups, [hangup])
+            XCTAssertEqual(result.windows[0].controls.filter { $0.identifier == "hangup-button" },
+                           [ControlSnapshot(role: "AXPopUpButton", identifier: "hangup-button", label: "Leave")])
+            XCTAssertEqual(MicrophoneClassifier.assess(result.windows, complete: result.complete).state, .muted)
+            XCTAssertEqual(CameraClassifier.assess(result.windows, complete: result.complete).state, .on)
+            XCTAssertEqual(CallEndClassifier.assess(result.windows, complete: result.complete).state, .active)
+            if control == .hand {
+                XCTAssertEqual(HandClassifier.assess(result.windows, complete: result.complete).state, .lowered)
+            }
+            XCTAssertTrue(stub.sleeps.isEmpty)
+            XCTAssertFalse(stub.batchReads.contains { $0.element == moreOptions && $0.names.contains(kAXDescriptionAttribute) })
+        }
+    }
+
+    func testPopupLeaveSupportsAXIdentifierFallbackWithoutAcceptingOtherPopupControls() throws {
+        let stub = AccessibilityReaderStub()
+        let hangup = stub.node("AXPopUpButton", attributes: [
+            "AXDOMIdentifier": "unrelated", kAXIdentifierAttribute: "hangup-button", kAXTitleAttribute: "Leave"
+        ])
+        let otherPopups = ["microphone-button", "video-button", "raisehands-button", "resume-button",
+                           "hangup-button-more-options", "hangup-button-menu"].map { identifier in
+            stub.node("AXPopUpButton", attributes: ["AXDOMIdentifier": identifier, kAXDescriptionAttribute: "Leave"])
+        }
+        stub.window([hangup] + otherPopups)
+        let result = try stub.read(control: .call)
+        XCTAssertTrue(result.complete)
+        XCTAssertEqual(result.windows[0].controls, [ControlSnapshot(role: "AXPopUpButton", identifier: "hangup-button", label: "Leave")])
+        XCTAssertEqual(result.handles[1]?.hangups, [hangup])
+        XCTAssertEqual(CallEndClassifier.assess(result.windows, complete: result.complete).state, .active)
+    }
+
     func testIdentifiersUseFirstRecognizedDOMOrAXIdentifier() throws {
         let cases: [(Any?, Any?, String?)] = [
             ("microphone-button", "video-button", "microphone-button"),

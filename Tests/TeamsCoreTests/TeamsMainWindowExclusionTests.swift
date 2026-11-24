@@ -95,6 +95,26 @@ final class TeamsMainWindowExclusionTests: XCTestCase {
         }
     }
 
+    func testPopupLeaveBeforeShellMarkersPreventsExcludingCallContent() throws {
+        let stub = AccessibilityReaderStub()
+        let microphone = stub.button()
+        let content = stub.node(children: [microphone])
+        let main = mainWindow(stub, content: content)
+        let children = try XCTUnwrap(stub.values[main]?[kAXChildrenAttribute] as? [AXUIElement])
+        let hangup = stub.node("AXPopUpButton", attributes: ["AXDOMIdentifier": "hangup-button", kAXDescriptionAttribute: "Leave"])
+        stub.values[main]?[kAXChildrenAttribute] = [hangup] + children
+        let result = try TeamsAccessibilityReader(environment: stub.environment).readWithEvidence()
+        XCTAssertTrue(result.snapshot.complete)
+        XCTAssertTrue(stub.traversed.contains(content))
+        XCTAssertEqual(result.snapshot.handles[1]?.microphones, [microphone])
+        XCTAssertEqual(result.snapshot.handles[1]?.hangups, [hangup])
+        // Normal discovery stops probing shell markers once it has call evidence.
+        XCTAssertEqual(result.scans.last?.windows.first?.mainWindowRecognition, .callSurface)
+        XCTAssertEqual(result.scans.last?.windows.first?.excludedMainWindow, false)
+        let audit = try TeamsAccessibilityReader(environment: stub.environment, mode: .audit).readWithEvidence()
+        XCTAssertEqual(audit.scans.last?.windows.first?.mainWindowRecognition, .conflicting)
+    }
+
     func testOptionalSearchReadFailureFallsBackWhileRequiredReadFailuresStayIncomplete() throws {
         for failure in ["search", "profile", "node"] {
             let stub = AccessibilityReaderStub()
